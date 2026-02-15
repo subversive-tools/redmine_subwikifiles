@@ -10,23 +10,21 @@ en:
     help_enabled: "Enables the plugin globally. If disabled, it can be enabled per project."
     help_base_path: "Absolute path on the server where Markdown files will be stored."
     help_conflict_strategy: "Determines what happens when file and database differ."
+    
+    # Folder assignment
     folder_assignment_title: "Assign Folders"
     assign_folder: "Assign folder '%{name}'"
     assign_button: "Assign"
     no_unassigned_folders: "No new folders found."
-    subproject_created: "Subproject '%{name}' was created."
     invalid_action: "Invalid action."
     unassigned_folders_found: "%{count} new folder(s) found: %{folders}."
+    unassigned_top_folders_found: "%{count} new top-level folder(s) found: %{folders}."
     assign_now: "Assign now"
     
     folder_detection:
       new_folder_found: "New Folder Found"
       folder_path: "Path"
       parent_project: "Parent Project"
-      depth: "Nesting Depth"
-      misplaced_warning: "This folder is not in a _projects/ directory."
-      auto_fix_info: "It will be automatically moved when creating a subproject."
-      will_auto_move: "Folder will be automatically moved to _projects/."
       choose_action: "Please choose an action"
       remaining_count:
         one: "1 more folder waiting for assignment."
@@ -34,15 +32,14 @@ en:
     
     actions:
       create_subproject: "Create Subproject"
-      create_subproject_desc: "Creates an independent Redmine project with its own management and permissions."
-      quarantine: "Move to Quarantine"
-      quarantine_desc: "Moves the folder to an isolated quarantine area."
+      create_subproject_desc: "Create a new Redmine subproject for this folder. All containing files will be automatically scanned and imported."
+      orphan: "Ignore"
+      orphan_desc: "Move this folder to '_orphaned'. It will be ignored by future scans."
+      restore_file: "Create File from Page"
+      fix_frontmatter: "Fix Markers"
     
-    quarantine:
-      confirm: "Do you really want to move folder '%{name}' to quarantine?"
-      moved_to: "Moved to Quarantine"
-    
-    folder_quarantined: "Folder '%{name}' has been moved to quarantine."
+    orphan:
+      confirm: "Are you sure you want to ignore folder '%{name}'? It will be moved to '_orphaned'."
     
     file_sync:
       imported_count: "Imported %{count} new wiki pages: %{pages}"
@@ -55,14 +52,18 @@ en:
       file_missing: "Ref-File '%{file}' missing!"
       fix_failed: "Failed to fix file(s):"
     
+    folder_sync:
+      pending_folders: "New folder(s) found: %{details}. Create subproject?"
+      create_subproject: "Create subproject"
+      move_to_orphaned: "Ignore"
+      subproject_created: "Subproject '%{name}' created successfully."
+      folder_orphaned: "Folder '%{name}' moved to _orphaned."
+    
     notices:
       file_restored: "File '%{file}' successfully restored from wiki content with metadata."
     
     errors:
       page_not_found: "Wiki page '%{page}' not found or has no content."
-    
-    actions:
-      restore_file: "Create File from Page"
     
     tooltips:
       fix_wiki: "Include as Wiki page here (fix frontmatter)"

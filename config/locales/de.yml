@@ -10,39 +10,36 @@ de:
     help_enabled: "Aktiviert das Plugin global. Wenn deaktiviert, kann es pro Projekt eingeschaltet werden."
     help_base_path: "Absoluter Pfad auf dem Server, wo die Markdown-Dateien gespeichert werden."
     help_conflict_strategy: "Bestimmt, was passiert, wenn Datei und Datenbank unterschiedlich sind."
+    
+    # Ordner-Zuweisung
     folder_assignment_title: "Ordner zuordnen"
     assign_folder: "Ordner '%{name}' zuordnen"
     assign_button: "Zuordnen"
     no_unassigned_folders: "Keine neuen Ordner gefunden."
-    subproject_created: "Unterprojekt '%{name}' wurde erstellt."
     invalid_action: "Ungültige Aktion."
     unassigned_folders_found: "%{count} neue(r) Ordner gefunden: %{folders}."
+    unassigned_top_folders_found: "%{count} neue(r) Ordner auf oberster Ebene erkannt: %{folders}."
     assign_now: "Jetzt zuordnen"
     
     folder_detection:
       new_folder_found: "Neuer Ordner gefunden"
       folder_path: "Pfad"
       parent_project: "Eltern-Projekt"
-      depth: "Verschachtelungstiefe"
-      misplaced_warning: "Dieser Ordner ist nicht in einem _projects/ Verzeichnis."
-      auto_fix_info: "Bei 'Unterprojekt erstellen' wird er automatisch verschoben."
-      will_auto_move: "Ordner wird automatisch nach _projects/ verschoben."
-      choose_action: "Bitte wählen Sie eine Aktion"
+      choose_action: "Bitte wähle eine Aktion"
       remaining_count:
         one: "Noch 1 weiterer Ordner wartet auf Zuweisung."
         other: "Noch %{count} weitere Ordner warten auf Zuweisung."
     
     actions:
       create_subproject: "Unterprojekt erstellen"
-      create_subproject_desc: "Erstellt ein eigenständiges Redmine-Projekt mit eigener Verwaltung und Berechtigungen."
-      quarantine: "In Quarantäne verschieben"
-      quarantine_desc: "Verschiebt den Ordner in einen isolierten Quarantäne-Bereich."
+      create_subproject_desc: "Erstellt ein neues Redmine-Unterprojekt für diesen Ordner. Alle enthaltenen Dateien werden automatisch gescannt und importiert."
+      orphan: "Ignorieren"
+      orphan_desc: "Verschiebe diesen Ordner nach '_orphaned'. Er wird bei zukünftigen Scans ignoriert."
+      restore_file: "Datei aus Seite erstellen"
+      fix_frontmatter: "Markierungen reparieren"
     
-    quarantine:
-      confirm: "Möchten Sie den Ordner '%{name}' wirklich in Quarantäne verschieben?"
-      moved_to: "Verschoben nach Quarantäne"
-    
-    folder_quarantined: "Ordner '%{name}' wurde in Quarantäne verschoben."
+    orphan:
+      confirm: "Bist du sicher, dass du den Ordner '%{name}' ignorieren möchtest? Er wird nach '_orphaned' verschoben."
     
     file_sync:
       imported_count: "%{count} neue Wiki-Seiten importiert: %{pages}"
@@ -55,14 +52,18 @@ de:
       file_missing: "Ref-Datei '%{file}' fehlt!"
       fix_failed: "Fehler beim Fixen der Datei(en):"
     
+    folder_sync:
+      pending_folders: "Neue(r) Ordner gefunden: %{details}. Unterprojekt erstellen?"
+      create_subproject: "Unterprojekt erstellen"
+      move_to_orphaned: "Ignorieren"
+      subproject_created: "Unterprojekt '%{name}' erfolgreich erstellt."
+      folder_orphaned: "Ordner '%{name}' nach _orphaned verschoben."
+    
     notices:
       file_restored: "Datei '%{file}' erfolgreich aus dem Wiki-Inhalt mit Metadaten wiederhergestellt."
     
     errors:
       page_not_found: "Wiki-Seite '%{page}' nicht gefunden oder hat keinen Inhalt."
-    
-    actions:
-      restore_file: "Datei aus Seite erstellen"
     
     tooltips:
       fix_wiki: "Als Wiki-Seite hier aufnehmen (Frontmatter fixen)"

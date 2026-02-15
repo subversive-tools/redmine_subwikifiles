@@ -1,6 +1,6 @@
 # Redmine Subwikifiles Plugin
 
-![Version](https://img.shields.io/badge/version-0.2.3-blue.svg)
+![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)
 ![Redmine](https://img.shields.io/badge/Redmine-5.0%20%7C%206.0-red.svg?logo=redmine)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
@@ -18,6 +18,8 @@ A Redmine plugin that stores Wiki pages as Markdown files in the filesystem inst
 - **Git Integration**: Automatically commits changes to a Git repository in the storage directory.
 - **Attachment Handling**: Syncs attachments between Redmine and a local `_attachments` folder.
 - **Conflict Detection**: Detects if the file on disk is newer than the database version.
+- **Folder Detection**: Automatically detects new folders and offers inline buttons to create subprojects or ignore them.
+- **Orphan File Handling**: Detects orphan files (missing frontmatter) and provides fix buttons.
 
 ## Screenshots
 

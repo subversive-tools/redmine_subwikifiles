@@ -1,6 +1,9 @@
+get 'subwikifiles/folder_prompt', to: 'subwikifiles#folder_prompt', as: 'global_subwikifiles_folder_prompt'
+post 'subwikifiles/assign_folder', to: 'subwikifiles#assign_folder', as: 'global_subwikifiles_assign_folder'
 get 'projects/:project_id/subwikifiles/folder_prompt', to: 'subwikifiles#folder_prompt', as: 'project_subwikifiles_folder_prompt'
 post 'projects/:project_id/subwikifiles/assign_folder', to: 'subwikifiles#assign_folder', as: 'project_subwikifiles_assign_folder'
 post 'projects/:project_id/subwikifiles/fix_frontmatter', to: 'subwikifiles#fix_frontmatter', as: 'project_subwikifiles_fix_frontmatter'
 post 'projects/:project_id/subwikifiles/attach_file', to: 'subwikifiles#attach_file', as: 'project_subwikifiles_attach_file'
-
 post 'projects/:project_id/subwikifiles/restore_file', to: 'subwikifiles#restore_file', as: 'project_subwikifiles_restore_file'
+post 'projects/:project_id/subwikifiles/create_subproject_from_folder', to: 'subwikifiles#create_subproject_from_folder', as: 'project_subwikifiles_create_subproject'
+post 'projects/:project_id/subwikifiles/orphan_folder', to: 'subwikifiles#orphan_folder', as: 'project_subwikifiles_orphan_folder'

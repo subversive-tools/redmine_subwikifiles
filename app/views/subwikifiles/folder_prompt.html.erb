@@ -4,60 +4,50 @@
   <% if @folder %>
     <div class="folder-info">
       <p><strong><%= l('redmine_subwikifiles.folder_detection.folder_path') %>:</strong></p>
-      <code class="folder-path"><%= @folder[:relative_path] %></code>
+      <code class="folder-path"><%= @folder[:relative_path] || @folder[:name] %></code>
       
-      <% if @folder[:misplaced] %>
-        <div class="flash warning">
-          ⚠️ <%= l('redmine_subwikifiles.folder_detection.misplaced_warning') %>
-          <br>
-          <em><%= l('redmine_subwikifiles.folder_detection.auto_fix_info') %></em>
+      <% if @project %>
+        <div class="folder-details">
+          <p><strong><%= l('redmine_subwikifiles.folder_detection.parent_project') %>:</strong> <%= @project.name %></p>
         </div>
       <% end %>
-      
-      <div class="folder-details">
-        <p><strong><%= l('redmine_subwikifiles.folder_detection.parent_project') %>:</strong> <%= @folder[:parent_project].name %></p>
-        <p><strong><%= l('redmine_subwikifiles.folder_detection.depth') %>:</strong> <%= @folder[:depth] %></p>
-      </div>
     </div>
     
     <h3><%= l('redmine_subwikifiles.folder_detection.choose_action') %></h3>
     
     <div class="folder-actions">
-      <%= form_tag project_subwikifiles_assign_folder_path(@project), method: :post do %>
+      <%= form_tag(@project ? project_subwikifiles_assign_folder_path(@project) : global_subwikifiles_assign_folder_path, method: :post) do %>
         <%= hidden_field_tag :folder_path, @folder[:path] %>
         <%= hidden_field_tag :folder_name, @folder[:name] %>
-        <%= hidden_field_tag :parent_project_id, @folder[:parent_project].id %>
-        <%= hidden_field_tag :misplaced, @folder[:misplaced] %>
         
         <div class="action-option">
           <h4>1. <%= l('redmine_subwikifiles.actions.create_subproject') %></h4>
           <p class="description"><%= l('redmine_subwikifiles.actions.create_subproject_desc') %></p>
-          <% if @folder[:misplaced] %>
-            <p class="auto-fix-notice">
-              ℹ️ <%= l('redmine_subwikifiles.folder_detection.will_auto_move') %>
-            </p>
-          <% end %>
           <%= submit_tag l('redmine_subwikifiles.actions.create_subproject'), 
                          name: 'action_type', 
                          value: 'subproject', 
                          class: 'btn-primary' %>
         </div>
-        
-        <div class="action-option quarantine-option">
-          <h4>2. <%= l('redmine_subwikifiles.actions.quarantine') %></h4>
-          <p class="description"><%= l('redmine_subwikifiles.actions.quarantine_desc') %></p>
-          <%= submit_tag l('redmine_subwikifiles.actions.quarantine'), 
+
+        <div class="action-option orphan-option">
+          <h4>2. <%= l('redmine_subwikifiles.actions.orphan') %></h4>
+          <p class="description"><%= l('redmine_subwikifiles.actions.orphan_desc') %></p>
+          <%= submit_tag l('redmine_subwikifiles.actions.orphan'), 
                          name: 'action_type', 
-                         value: 'quarantine', 
-                         class: 'btn-danger',
-                         data: { confirm: l('redmine_subwikifiles.quarantine.confirm', name: @folder[:name]) } %>
+                         value: 'orphan', 
+                         class: 'btn-secondary',
+                         data: { confirm: l('redmine_subwikifiles.orphan.confirm', name: @folder[:name]) } %>
         </div>
       <% end %>
     </div>
     
-    <p class="remaining-folders">
-      <%= l('redmine_subwikifiles.folder_detection.remaining_count', count: @all_unassigned.size - 1) %>
-    </p>
+    <% if @all_unassigned.size > 1 %>
+      <p class="remaining-folders">
+        <%= l('redmine_subwikifiles.folder_detection.remaining_count', count: @all_unassigned.size - 1) %>
+      </p>
+    <% end %>
+  <% else %>
+    <p><%= l('redmine_subwikifiles.no_unassigned_folders') %></p>
   <% end %>
 </div>
 
@@ -111,65 +101,50 @@
     color: #666;
     margin: 10px 0;
   }
-  
-  .quarantine-option {
-    border-color: #ff9800;
+
+  .orphan-option {
+    border-color: #6c757d;
+  }
+
+  .orphan-option:hover {
+    border-color: #5a6268;
+    background: #f8f9fa;
   }
   
-  .quarantine-option:hover {
-    border-color: #f44336;
-    background: #fff8f8;
-  }
-  
-  .auto-fix-notice {
-    background: #e3f2fd;
-    padding: 8px 12px;
-    border-left: 3px solid #2196f3;
-    margin: 10px 0;
-    font-size: 0.9em;
-  }
-  
-  .btn-primary, .btn-secondary, .btn-danger {
+  .btn-primary, .btn-secondary {
     padding: 10px 20px;
     border: none;
     border-radius: 3px;
     cursor: pointer;
     font-size: 14px;
+    font-weight: bold;
     transition: background 0.2s;
+    color: #fff !important;
+    text-decoration: none !important;
   }
   
   .btn-primary {
-    background: #4caf50;
-    color: white;
+    background: #28a745;
   }
   
   .btn-primary:hover {
-    background: #45a049;
+    background: #218838;
   }
-  
+
   .btn-secondary {
-    background: #2196f3;
-    color: white;
+    background: #6c757d;
   }
-  
+
   .btn-secondary:hover {
-    background: #0b7dda;
-  }
-  
-  .btn-danger {
-    background: #ff9800;
-    color: white;
-  }
-  
-  .btn-danger:hover {
-    background: #f44336;
+    background: #5a6268;
   }
   
   .remaining-folders {
     margin-top: 20px;
     padding: 10px;
-    background: #fff9c4;
-    border-left: 3px solid #fbc02d;
+    background: #d1ecf1;
+    border-left: 3px solid #17a2b8;
     font-size: 0.9em;
+    color: #0c5460;
   }
 </style>
