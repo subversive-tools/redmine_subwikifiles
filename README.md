@@ -21,9 +21,10 @@ A Redmine plugin that stores Wiki pages as Markdown files in the filesystem inst
 
 ## Screenshots
 
-| Plugin Settings |
-|:---:|
-| *(Add screenshot here)* |
+<img width="452" height="253" alt="screenshot1" src="https://github.com/user-attachments/assets/44d7ec5f-6c9f-4958-af87-dfd60a992f6d" />
+<img width="850" height="340" alt="screenshot2" src="https://github.com/user-attachments/assets/7753e67c-d227-4082-9ada-310d7c443fcf" />
+<img width="834" height="393" alt="screenshot3" src="https://github.com/user-attachments/assets/201b93ae-9ecc-4047-9209-6f8a86e6037c" />
+
 
 ## Installation
 
