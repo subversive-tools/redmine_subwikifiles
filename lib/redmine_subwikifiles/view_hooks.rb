@@ -28,14 +28,9 @@ module RedmineSubwikifiles
       if controller.is_a?(WikiController) && controller.action_name == 'edit'
         file_path = controller.instance_variable_get(:@associated_file_path)
         if file_path
-           # Calculate relative path
-           # 1. Remove base path
+           # Calculate relative path from base
            base_dir = Setting.plugin_redmine_subwikifiles['base_path'] || '/var/lib/redmine/wiki_files'
            relative_path = file_path.sub(base_dir, '')
-           
-           # 2. Cleanup internal structure artifacts (like /_projects/) to show logical path
-           # E.g. /myproject/_projects/subproject/file.md -> /myproject/subproject/file.md
-           relative_path = relative_path.gsub('/_projects/', '/')
            
            # Ensure it starts with /
            relative_path = "/#{relative_path}" unless relative_path.start_with?('/')
@@ -123,22 +118,21 @@ module RedmineSubwikifiles
             var filesData = #{pending_files_json};
             var i18n = #{translations.to_json};
             
-            // Inject CSS for the button
+            // Inject CSS for the button (same design as folder-action-btn)
             var style = document.createElement('style');
             style.innerHTML = `
               .fix-file-btn {
                 color: #fff !important;
                 text-decoration: none !important;
-                margin: 0 4px;
-                font-weight: bold;
+                margin: 0 2px;
                 font-size: 0.9em;
                 cursor: pointer;
-                background-color: #28a745;
-                padding: 3px 10px;
+                padding: 0px 7px;
                 border: none;
                 border-radius: 3px;
                 display: inline-block;
                 transition: background-color 0.2s;
+                background-color: #28a745;
               }
               .fix-file-btn:hover {
                 background-color: #218838;
@@ -329,19 +323,19 @@ module RedmineSubwikifiles
                     
                     btn.removeAttribute('data-working');
                     btn.style.opacity = '1';
-                    btn.innerHTML = ' ⏎'; // Return symbol
+                    btn.innerHTML = '✓';
                   } else {
                     alert('Error: ' + (data.error || 'Unknown error'));
                     btn.removeAttribute('data-working');
                     btn.style.opacity = '1';
-                    btn.innerHTML = ' ⏎'; // Return symbol
+                    btn.innerHTML = '✓';
                   }
                 })
                 .catch(function(err) {
                   alert('Error: ' + err.message);
                   btn.removeAttribute('data-working');
                   btn.style.opacity = '1';
-                  btn.innerHTML = ' ⏎'; // Return symbol
+                  btn.innerHTML = '✓';
                 });
               });
               
@@ -367,7 +361,7 @@ module RedmineSubwikifiles
                 var entry = flashWarning.querySelector(selector);
                 
                 if (entry) {
-                   btn.innerHTML = ' ⏎'; // Return symbol
+                   btn.innerHTML = '✓';
                    entry.appendChild(btn);
                 } else {
                    // Fallback for cases where server-side wrapping might have missed something
@@ -435,37 +429,39 @@ module RedmineSubwikifiles
           all_folders.concat(project_folders)
         end
       else
-        # /projects/ page or other global pages
-        Rails.logger.info "RedmineSubwikifiles: Scanning for global and project folders"
-        if User.current.admin? || User.current.allowed_to?(:add_project, nil, global: true)
-          # First, scan for top-level folders
-          folder_scanner = RedmineSubwikifiles::FolderScanner.new(nil)
-          global_folders = folder_scanner.scan_all_folders
-          global_folders.each do |f|
-            f[:parent_project] = nil
-            f[:parent_project_id] = nil
+        # Only scan for global/top-level folders on /projects/ page
+        if is_projects_list
+          Rails.logger.info "RedmineSubwikifiles: Scanning for global and project folders"
+          if User.current.admin? || User.current.allowed_to?(:add_project, nil, global: true)
+            # First, scan for top-level folders
+            folder_scanner = RedmineSubwikifiles::FolderScanner.new(nil)
+            global_folders = folder_scanner.scan_all_folders
+            global_folders.each do |f|
+              f[:parent_project] = nil
+              f[:parent_project_id] = nil
+            end
+            all_folders.concat(global_folders)
           end
-          all_folders.concat(global_folders)
-        end
         
-        # Check if plugin is globally enabled
-        globally_enabled = Setting.plugin_redmine_subwikifiles['enabled']
-        
-        # Scan all projects (if globally enabled) or only those with module enabled
-        Project.active.each do |proj|
-          has_module = proj.module_enabled?(:redmine_subwikifiles)
+          # Check if plugin is globally enabled
+          globally_enabled = Setting.plugin_redmine_subwikifiles['enabled']
           
-          next unless has_module || globally_enabled
-          next unless User.current.allowed_to?(:manage_subwikifiles, proj) || User.current.admin?
-          
-          folder_scanner = RedmineSubwikifiles::FolderScanner.new(proj)
-          project_folders = folder_scanner.scan_all_folders
-          Rails.logger.info "RedmineSubwikifiles: Found #{project_folders.count} folders in project #{proj.identifier}"
-          project_folders.each do |f|
-            f[:parent_project] = proj
-            f[:parent_project_id] = proj.id
+          # Scan all projects (if globally enabled) or only those with module enabled
+          Project.active.each do |proj|
+            has_module = proj.module_enabled?(:redmine_subwikifiles)
+            
+            next unless has_module || globally_enabled
+            next unless User.current.allowed_to?(:manage_subwikifiles, proj) || User.current.admin?
+            
+            folder_scanner = RedmineSubwikifiles::FolderScanner.new(proj)
+            project_folders = folder_scanner.scan_all_folders
+            Rails.logger.info "RedmineSubwikifiles: Found #{project_folders.count} folders in project #{proj.identifier}"
+            project_folders.each do |f|
+              f[:parent_project] = proj
+              f[:parent_project_id] = proj.id
+            end
+            all_folders.concat(project_folders)
           end
-          all_folders.concat(project_folders)
         end
       end
       
@@ -596,7 +592,14 @@ module RedmineSubwikifiles
                   },
                   body: JSON.stringify({ folder_name: folderName, folder_path: folderPath })
                 })
-                .then(function(r) { return r.json(); })
+                .then(function(r) {
+                  if (!r.ok) {
+                    return r.text().then(function(text) {
+                      try { return JSON.parse(text); } catch(e) { throw new Error('Server error (' + r.status + ')'); }
+                    });
+                  }
+                  return r.json();
+                })
                 .then(function(data) {
                   if (data.success) {
                     // Redirect to new project settings
@@ -635,7 +638,14 @@ module RedmineSubwikifiles
                   },
                   body: JSON.stringify({ folder_name: folderName, folder_path: folderPath })
                 })
-                .then(function(r) { return r.json(); })
+                .then(function(r) {
+                  if (!r.ok) {
+                    return r.text().then(function(text) {
+                      try { return JSON.parse(text); } catch(e) { throw new Error('Server error (' + r.status + ')'); }
+                    });
+                  }
+                  return r.json();
+                })
                 .then(function(data) {
                   if (data.success) {
                     var entry = container.closest('.orphan-folder-entry');

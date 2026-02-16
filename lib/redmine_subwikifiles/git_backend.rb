@@ -7,8 +7,8 @@ module RedmineSubwikifiles
       # Base path from settings or default
       @base_dir = Setting.plugin_redmine_subwikifiles['base_path'] || '/var/lib/redmine/wiki_files'
       
-      # Build path recursively for nested subprojects
-      @repo_path = build_project_path(project)
+      # Use FileStorage for consistent path resolution (respects .project metadata)
+      @repo_path = FileStorage.new(project).project_path
       
       init_repo unless File.exist?(File.join(@repo_path, '.git'))
     end
@@ -160,18 +160,5 @@ module RedmineSubwikifiles
       run_git('config', 'user.email', 'redmine@example.com')
       run_git('config', 'user.name', 'Redmine')
     end
-    
-      # Build the complete path for a project, supporting nested subprojects
-      # Example: top/sub1/sub2/
-      def build_project_path(project)
-        if project.parent
-          # Recursively build parent path, then add identifier
-          parent_path = build_project_path(project.parent)
-          File.join(parent_path, project.identifier)
-        else
-          # Top-level project: use direct path
-          File.join(@base_dir, project.identifier)
-        end
-      end
   end
 end

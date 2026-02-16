@@ -10,26 +10,100 @@ module RedmineSubwikifiles
       # Fetch base path from settings, default to /var/lib/redmine/wiki_files if not set
       @base_dir = Setting.plugin_redmine_subwikifiles['base_path'] || '/var/lib/redmine/wiki_files'
       
-      # Build path recursively for nested subprojects (e.g., top/_projects/sub1/_projects/sub2/)
+      # Build path by finding folder with matching .project metadata
       @project_path = build_project_path(project)
     end
     
     private
     
-    # Build the complete path for a project, supporting nested subprojects
-    # Example: top/_projects/sub1/_projects/sub2/
+    # Build the complete path for a project by searching for .project metadata files
     def build_project_path(project)
       if project.parent
-        # Recursively build parent path, then add _projects/identifier
+        # Get parent path first
         parent_path = build_project_path(project.parent)
-        File.join(parent_path, '_projects', project.identifier)
+        # Search for subfolder with .project file matching this project's identifier
+        found_path = find_project_folder(parent_path, project.identifier)
+        return found_path if found_path
+
+        # Check if a folder with the raw name exists (e.g. "Kroko isst Schoko")
+        raw_name_path = File.join(parent_path, project.name)
+        return raw_name_path if Dir.exist?(raw_name_path)
+
+        # Fallback: check sanitized name for legacy folders
+        name_path = File.join(parent_path, self.class.sanitize_filename(project.name))
+        return name_path if Dir.exist?(name_path)
+
+        # Default for new folder creation: use raw name to preserve original naming
+        raw_name_path
       else
-        # Top-level project: use direct path
-        File.join(@base_dir, project.identifier)
+        # Top-level project: search in base_dir
+        found_path = find_project_folder(@base_dir, project.identifier)
+        return found_path if found_path
+
+        # Check for existing folder by raw name
+        raw_name_path = File.join(@base_dir, project.name)
+        return raw_name_path if Dir.exist?(raw_name_path)
+
+        # Fallback: check sanitized name for legacy folders
+        name_path = File.join(@base_dir, self.class.sanitize_filename(project.name))
+        return name_path if Dir.exist?(name_path)
+
+        # Default for new folder creation: use raw name
+        raw_name_path
       end
     end
     
+    # Find a folder containing a .project file with matching id
+    def find_project_folder(search_path, identifier)
+      return nil unless Dir.exist?(search_path)
+      
+      Dir.foreach(search_path) do |entry|
+        next if entry.start_with?('.')
+        next if ['_orphaned', '_attachments'].include?(entry)
+        
+        full_path = File.join(search_path, entry)
+        next unless Dir.exist?(full_path)
+        
+        project_file = File.join(full_path, '.project')
+        if File.exist?(project_file)
+          metadata = read_project_metadata(project_file)
+          return full_path if metadata['id'] == identifier
+        end
+      end
+      
+      nil
+    end
+    
+    # Read .project metadata file (YAML frontmatter style)
+    def read_project_metadata(path)
+      content = File.read(path, encoding: 'UTF-8')
+      if content =~ /\A---\s*\n(.*?)\n---/m
+        YAML.safe_load($1) || {}
+      else
+        {}
+      end
+    rescue => e
+      Rails.logger.error "RedmineSubwikifiles: Failed to read .project file: #{e.message}"
+      {}
+    end
+    
     public
+    
+    # Write .project metadata file
+    def self.write_project_metadata(folder_path, project)
+      project_file = File.join(folder_path, '.project')
+      content = <<~YAML
+        ---
+        id: #{project.identifier}
+        name: "#{project.name}"
+        created: "#{Time.now.iso8601}"
+        ---
+      YAML
+      File.write(project_file, content, encoding: 'UTF-8')
+      Rails.logger.info "RedmineSubwikifiles: Created .project metadata in #{folder_path}"
+    rescue => e
+      Rails.logger.error "RedmineSubwikifiles: Failed to write .project file: #{e.message}"
+    end
 
     def file_exists?(title)
       !resolve_existing_path(title).nil?
@@ -88,13 +162,17 @@ module RedmineSubwikifiles
       Rails.logger.info "RedmineSubwikifiles: Resolution failed for title '#{title}'. Checked: #{variants.map { |v| File.join(@project_path, "#{v}.md") }.join(', ')}"
       nil
     end
-    
-    private
-    
-    def sanitize_filename(title)
+
+    def self.sanitize_filename(title)
       # Replace spaces with underscores, remove special chars
       # Keep only alphanumeric, underscores, and hyphens
       title.gsub(' ', '_').gsub(/[^\w\-]/, '')
+    end
+
+    private
+
+    def sanitize_filename(title)
+      self.class.sanitize_filename(title)
     end
   end
 end

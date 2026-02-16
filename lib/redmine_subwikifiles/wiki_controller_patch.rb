@@ -45,6 +45,15 @@ module RedmineSubwikifiles
         Rails.logger.error e.backtrace.join("\n")
       end
 
+      # Sync folder renames to Redmine project names (respects conflict_strategy)
+      begin
+        Rails.logger.info "RedmineSubwikifiles: Calling sync_folder_renames_to_redmine for #{@project&.identifier}"
+        sync_folder_renames_to_redmine(@project)
+      rescue => e
+        Rails.logger.error "RedmineSubwikifiles: Folder rename sync failed: #{e.message}"
+        Rails.logger.error e.backtrace.join("\n")
+      end
+
       Rails.logger.info "RedmineSubwikifiles: Starting file scan..."
       
       # Scan for new files (orphans)
@@ -253,6 +262,57 @@ module RedmineSubwikifiles
           msg << "<a href='#{restore_url}' class='icon icon-add' data-method='post'>#{I18n.t('redmine_subwikifiles.actions.restore_file')}</a>"
           flash.now[:error] = msg.html_safe
         end
+      end
+    end
+
+    private
+
+    # Detect folder renames in the filesystem and sync them to Redmine project names.
+    # Only applies when conflict_strategy is 'file_wins' or 'manual'.
+    # With 'db_wins', the filesystem is expected to follow Redmine, not vice versa.
+    def sync_folder_renames_to_redmine(project)
+      conflict_strategy = Setting.plugin_redmine_subwikifiles['conflict_strategy'] || 'file_wins'
+      return if conflict_strategy == 'db_wins'
+
+      sync_single_project_name(project)
+
+      # Also check direct subprojects
+      project.children.active.each do |child|
+        next unless child.module_enabled?(:redmine_subwikifiles) || Setting.plugin_redmine_subwikifiles['enabled']
+        sync_single_project_name(child)
+      end
+    end
+
+    # For a single project: compare the actual folder name to the project name.
+    # If different, update the project name in Redmine.
+    def sync_single_project_name(project)
+      storage = RedmineSubwikifiles::FileStorage.new(project)
+      folder_path = storage.project_path
+      Rails.logger.info "RedmineSubwikifiles: sync_single_project_name '#{project.identifier}': folder_path=#{folder_path}, exists=#{Dir.exist?(folder_path)}"
+      return unless Dir.exist?(folder_path)
+
+      folder_name = File.basename(folder_path)
+      
+      Rails.logger.info "RedmineSubwikifiles: sync_single_project_name '#{project.identifier}': folder_name='#{folder_name}', project.name='#{project.name}', match=#{folder_name == project.name}"
+      # Nothing to do if names match
+      return if folder_name == project.name
+
+      Rails.logger.info "RedmineSubwikifiles: Folder rename detected for '#{project.identifier}': " \
+                        "project name='#{project.name}', folder name='#{folder_name}'. Syncing to Redmine."
+
+      # Update project name to match folder, suppress our own after_save callback
+      Thread.current[:redmine_subwikifiles_syncing] = true
+      begin
+        project.name = folder_name
+        if project.save
+          Rails.logger.info "RedmineSubwikifiles: Updated project name to '#{folder_name}'"
+          # Update .project metadata to keep it consistent
+          RedmineSubwikifiles::FileStorage.write_project_metadata(folder_path, project)
+        else
+          Rails.logger.error "RedmineSubwikifiles: Failed to update project name: #{project.errors.full_messages.join(', ')}"
+        end
+      ensure
+        Thread.current[:redmine_subwikifiles_syncing] = false
       end
     end
   end

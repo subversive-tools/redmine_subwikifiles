@@ -1,10 +1,10 @@
 # Redmine Subwikifiles Plugin
 
-![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)
+![Version](https://img.shields.io/badge/version-0.4.0-blue.svg)
 ![Redmine](https://img.shields.io/badge/Redmine-5.0%20%7C%206.0-red.svg?logo=redmine)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
-A Redmine plugin that stores Wiki pages as Markdown files in the filesystem instead of the database. It provides bidirectional synchronization: changes in Redmine are written as MD files, and external changes to MD files are detected and adopted when loading. It also includes Git integration for versioning.
+Redmine Subwikifiles enables bidirectional synchronization between Redmine Wiki pages and local Markdown files. Edit your documentation in an external editor of your choice; the plugin handles the structure, detects orphan files and folders, and automatically versions changes via Git. Ideal for teams that want to manage their documentation within the filesystem.
 
 ---
 
@@ -58,25 +58,32 @@ Navigate to **Administration > Plugins > Redmine Subwikifiles > Configure**.
 
 | Option | Description |
 |:---|:---|
-| **Enabled** | Enable/Disable the plugin features. |
+| **Enabled** | Enable globally. If enabled, the plugin is active for all projects. If disabled, it can be enabled per project (subprojects automatically inherit the feature). |
 | **Base Path** | The root directory for storing wiki files (default: `/var/lib/redmine/wiki_files`). |
 | **Git Enabled** | Enable automatic Git commits when saving pages. |
 | **Conflict Strategy** | Defines behavior when file is newer than DB. <br> - `file_wins`: File content overwrites DB content. <br> - `manual`: Logs a warning (future: merge markers). |
 
+> [!WARNING]
+> **Filesystem Permissions**: Redmine permissions are **NOT** propagated to the filesystem. Folders and files on disk do NOT correspond to Redmine project members/roles. Access to the files is governed solely by the operating system user running Redmine.
+
 ## Directory Structure
 
-Files are stored in `{base_path}/{project_identifier}/`.
+Files are stored in `{base_path}/{Project Name}/`.
 Hierarchy is represented by folders.
 
 ```
-project_identifier/
+Project Name/
+├── .project
 ├── Wiki.md
 ├── Parent_Page.md
-├── Parent_Page/
-│   └── Child_Page.md
-└── _attachments/
-    └── Page_Title/
-        └── image.png
+├── Child_Page.md
+├── _attachments/
+│   └── Page_Title/
+│       └── image.png
+├── _orphaned/
+└── Subproject Name/
+    ├── .project
+    └── Wiki.md
 ```
 
 ## Contributing

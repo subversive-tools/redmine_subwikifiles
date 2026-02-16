@@ -1,6 +1,6 @@
 module RedmineSubwikifiles
   # Scans for unassigned folders within a project's base directory.
-  # Unassigned folders are those that do not yet have a corresponding Redmine subproject.
+  # Unassigned folders are those that do not have a .project metadata file.
   class FolderScanner
     attr_reader :project
     
@@ -30,22 +30,21 @@ module RedmineSubwikifiles
       Dir.foreach(@project_path) do |entry|
         next if entry.start_with?('.')
         next if entry.end_with?('.md')
-        next if ['_orphaned', '_attachments', '_projects'].include?(entry)
+        next if ['_orphaned', '_attachments'].include?(entry)
         
         full_path = File.join(@project_path, entry)
         next unless Dir.exist?(full_path)
         
-        # Check if this folder corresponds to a subproject
-        if subproject_exists?(entry)
-          # It's an assigned subproject folder.
-          # We skip it.
+        # Check if this folder has a .project metadata file
+        if has_project_metadata?(full_path)
+          # It's an assigned subproject folder - skip it
         else
           # It's an unassigned folder
           unassigned << {
             path: full_path,
             name: entry,
             parent_project: @project,
-            misplaced: false, # Direct child is valid
+            misplaced: false,
             relative_path: entry,
             depth: 0
           }
@@ -62,21 +61,10 @@ module RedmineSubwikifiles
     
     private
     
-    def subproject_exists?(folder_name)
-      # Normalize folder name the same way as when creating subprojects
-      normalized_name = folder_name.downcase.gsub(/[^a-z0-9\-]/, '-').gsub(/\-+/, '-').gsub(/^\-|\-$/, '')
-      
-      if @is_global
-        # In global mode, check if any top-level project matches the folder name
-        Project.where(parent_id: nil).active.any? do |p| 
-          p.identifier == folder_name || p.identifier == normalized_name
-        end
-      else
-        # In project mode, check if any child project matches the folder name
-        @project.children.active.any? do |child| 
-          child.identifier == folder_name || child.identifier == normalized_name
-        end
-      end
+    # Check if folder has a .project metadata file
+    def has_project_metadata?(folder_path)
+      project_file = File.join(folder_path, '.project')
+      File.exist?(project_file)
     end
   end
 end

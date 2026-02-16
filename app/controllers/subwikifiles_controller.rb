@@ -328,6 +328,9 @@ class SubwikifilesController < ApplicationController
     # Enable wiki and subwikifiles modules
     subproject.enabled_module_names = ['wiki', 'redmine_subwikifiles']
     
+    # Create .project metadata file in folder (keeps original folder name)
+    RedmineSubwikifiles::FileStorage.write_project_metadata(folder_path, subproject)
+    
     # Initialize Git repo
     begin
       RedmineSubwikifiles::GitBackend.new(subproject)

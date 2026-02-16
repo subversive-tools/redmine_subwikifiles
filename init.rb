@@ -1,9 +1,9 @@
-# Register the Redmine SubWikifiles plugin
+# Register the Redmine Subwikifiles plugin
 Redmine::Plugin.register :redmine_subwikifiles do
-  name 'Redmine SubWikifiles'
+  name 'Redmine Subwikifiles'
   author 'Stefan Mischke'
   description 'Bidirectional synchronization of Redmine Wiki pages and local Markdown files with integrated Git support.'
-  version '0.3.0'
+  version '0.4.0'
   url 'https://github.com/modoq/redmine_subwikifiles'
   author_url 'https://github.com/modoq'
 
@@ -55,6 +55,11 @@ begin
   require File.expand_path('../lib/redmine_subwikifiles/wiki_controller_patch', __FILE__)
   Rails.logger.info "RedmineSubwikifiles: Patching WikiController"
   WikiController.send(:include, RedmineSubwikifiles::WikiControllerPatch)
+  
+  # Patch Project: Handle folder renaming on identifier change
+  require File.expand_path('../lib/redmine_subwikifiles/project_patch', __FILE__)
+  Rails.logger.info "RedmineSubwikifiles: Patching Project"
+  Project.send(:include, RedmineSubwikifiles::ProjectPatch)
   
   Rails.logger.info "RedmineSubwikifiles: Plugin initialization and patching completed successfully"
 rescue => e
