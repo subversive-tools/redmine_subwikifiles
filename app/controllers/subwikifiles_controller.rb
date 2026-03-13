@@ -321,12 +321,23 @@ class SubwikifilesController < ApplicationController
       parent: @project
     )
     
+    # Inherit settings from parent
+    if @project
+      subproject.is_public = @project.is_public
+      subproject.inherit_members = true
+    end
+    
     unless subproject.save
       return { success: false, error: subproject.errors.full_messages.join(', ') }
     end
     
-    # Enable wiki and subwikifiles modules
-    subproject.enabled_module_names = ['wiki', 'redmine_subwikifiles']
+    # Inherit modules if parent exists
+    if @project
+      subproject.enabled_module_names = @project.enabled_module_names | ['wiki', 'redmine_subwikifiles']
+    else
+      # Fallback for top-level projects
+      subproject.enabled_module_names = ['wiki', 'redmine_subwikifiles']
+    end
     
     # Create .project metadata file in folder (keeps original folder name)
     RedmineSubwikifiles::FileStorage.write_project_metadata(folder_path, subproject)

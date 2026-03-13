@@ -24,6 +24,10 @@ module RedmineSubwikifiles
       folder_js = build_folder_js(controller)
       response += javascript_tag(folder_js) if folder_js.present?
       
+      # 3. CSS for folder notice
+      folder_css = build_folder_css(controller)
+      response += content_tag(:style, folder_css.html_safe) if folder_css.present?
+      
       # 3. Inject file path info if in Wiki Edit mode
       if controller.is_a?(WikiController) && controller.action_name == 'edit'
         file_path = controller.instance_variable_get(:@associated_file_path)
@@ -218,6 +222,17 @@ module RedmineSubwikifiles
                 })
                 .then(function(r) { 
                   console.log('RedmineSubwikifiles: Received response status ' + r.status);
+                  if (!r.ok) {
+                    return r.text().then(function(text) {
+                      try {
+                        var json = JSON.parse(text);
+                        throw new Error(json.error || 'Server error ' + r.status);
+                      } catch(e) {
+                        if (e.message.includes('Server error')) throw e;
+                        throw new Error('Server error ' + r.status + ': ' + text.substring(0, 100));
+                      }
+                    });
+                  }
                   return r.json(); 
                 })
                 .then(function(data) {
@@ -404,63 +419,56 @@ module RedmineSubwikifiles
     def build_folder_js(controller)
       return '' unless controller
       
-      # Get project from controller context (may be nil for /projects/ page)
+      # Get project from controller context
       project = controller.instance_variable_get(:@project)
       
-      # Check if we're on the projects list page
-      is_projects_list = controller.controller_name == 'projects' && controller.action_name == 'index' && project.nil?
+      # Determine context
+      is_projects_list = controller.controller_name == 'projects' && controller.action_name == 'index'
+      is_new_project_page = controller.controller_name == 'projects' && controller.action_name == 'new'
       
-      Rails.logger.info "RedmineSubwikifiles: build_folder_js called, is_projects_list=#{is_projects_list}, project=#{project&.identifier}"
+      Rails.logger.info "RedmineSubwikifiles: build_folder_js called. Context: proj_list=#{is_projects_list}, new_proj=#{is_new_project_page}, project=#{project&.identifier}"
       
-      # Collect all unassigned folders from relevant locations
       all_folders = []
       
-      if project
-        # Check permissions for this project
+      # FIX SCOPE: 
+      # If we are in a project context, we ONLY scan that project's subfolders.
+      # Global scanning is only done if we are on the project list or if user is admin.
+      
+      if project && !project.new_record?
+        # Scenario A: Project Context -> Only scan this project
         if User.current.allowed_to?(:manage_subwikifiles, project) || User.current.admin?
-          # Scan this project's directory
           folder_scanner = RedmineSubwikifiles::FolderScanner.new(project)
           project_folders = folder_scanner.scan_all_folders
-          Rails.logger.info "RedmineSubwikifiles: Found #{project_folders.count} folders in project #{project.identifier}"
           project_folders.each do |f|
-            f[:parent_project] = project
-            f[:parent_project_id] = project.id
+            f[:parent_project_id] = project.identifier
           end
           all_folders.concat(project_folders)
         end
-      else
-        # Only scan for global/top-level folders on /projects/ page
-        if is_projects_list
-          Rails.logger.info "RedmineSubwikifiles: Scanning for global and project folders"
-          if User.current.admin? || User.current.allowed_to?(:add_project, nil, global: true)
-            # First, scan for top-level folders
-            folder_scanner = RedmineSubwikifiles::FolderScanner.new(nil)
-            global_folders = folder_scanner.scan_all_folders
-            global_folders.each do |f|
-              f[:parent_project] = nil
-              f[:parent_project_id] = nil
-            end
-            all_folders.concat(global_folders)
-          end
+      elsif is_projects_list || is_new_project_page || User.current.admin?
+        # Scenario B: Global Context / Project List / Admin -> Scan global and/or all projects
         
-          # Check if plugin is globally enabled
+        # 1. Scan Global
+        if User.current.admin? || User.current.allowed_to?(:add_project, nil, global: true)
+          folder_scanner = RedmineSubwikifiles::FolderScanner.new(nil)
+          global_folders = folder_scanner.scan_all_folders
+          global_folders.each do |f|
+            f[:parent_project_id] = nil
+          end
+          all_folders.concat(global_folders)
+        end
+        
+        # 2. Scan all projects if on index (expensive, so only done here)
+        if is_projects_list
           globally_enabled = Setting.plugin_redmine_subwikifiles['enabled']
-          
-          # Scan all projects (if globally enabled) or only those with module enabled
           Project.active.each do |proj|
             has_module = proj.module_enabled?(:redmine_subwikifiles)
-            
             next unless has_module || globally_enabled
             next unless User.current.allowed_to?(:manage_subwikifiles, proj) || User.current.admin?
             
-            folder_scanner = RedmineSubwikifiles::FolderScanner.new(proj)
-            project_folders = folder_scanner.scan_all_folders
-            Rails.logger.info "RedmineSubwikifiles: Found #{project_folders.count} folders in project #{proj.identifier}"
-            project_folders.each do |f|
-              f[:parent_project] = proj
-              f[:parent_project_id] = proj.id
-            end
-            all_folders.concat(project_folders)
+            p_scanner = RedmineSubwikifiles::FolderScanner.new(proj)
+            p_folders = p_scanner.scan_all_folders
+            p_folders.each { |f| f[:parent_project_id] = proj.identifier }
+            all_folders.concat(p_folders)
           end
         end
       end
@@ -469,20 +477,16 @@ module RedmineSubwikifiles
       return '' if all_folders.empty?
       
       folder_data = all_folders.map do |f|
-        safe_id = Base64.strict_encode64("#{f[:parent_project]&.identifier || 'global'}-#{f[:name]}").gsub(/[^a-zA-Z0-9]/, '')
+        safe_id = Base64.strict_encode64("#{f[:parent_project_id] || 'global'}-#{f[:name]}").gsub(/[^a-zA-Z0-9]/, '')
         {
+          id: safe_id,
           name: f[:name],
           path: f[:path],
-          id: safe_id,
-          project_id: f[:parent_project]&.identifier,
-          parent_name: f[:parent_project]&.name,
-          parent_db_id: f[:parent_project_id]
+          project_id: f[:parent_project_id]
         }
       end
-      
+
       pending_folders_json = folder_data.to_json
-      is_projects_list_json = is_projects_list ? 'true' : 'false'
-      
       translations = {
         create_subproject: I18n.t('redmine_subwikifiles.folder_sync.create_subproject'),
         move_to_orphaned: I18n.t('redmine_subwikifiles.folder_sync.move_to_orphaned'),
@@ -490,345 +494,196 @@ module RedmineSubwikifiles
       }
       
       js_code = <<~JS
-          (function() {
-            var foldersData = #{pending_folders_json};
-            var i18n = #{translations.to_json};
-            var isProjectsList = #{is_projects_list_json};
+        /* RedmineSubwikifiles v126FIX */
+        (function() {
+          var vKey = 'sw_v126_loaded';
+          if (window[vKey]) { console.log('RedmineSubwikifiles: v126FIX already running'); return; }
+          window[vKey] = true;
+
+          console.log('RedmineSubwikifiles: v126FIX Inline script starting...');
+          window.sw_v126_folders = #{pending_folders_json};
+          window.sw_v126_i18n = #{translations.to_json};
+          
+          function createSwButtons(folderName, folderPath, safeId, projectId) {
+            var container = document.createElement('span');
+            container.className = 'folder-action-container';
             
-            // Inject CSS for folder buttons
-            var style = document.createElement('style');
-            style.innerHTML = `
-              .folder-action-btn {
-                color: #fff !important;
-                text-decoration: none !important;
-                margin: 0 2px;
-                font-size: 0.9em;
-                cursor: pointer;
-                padding: 0px 7px;
-                border: none;
-                border-radius: 3px;
-                display: inline-block;
-                transition: background-color 0.2s;
-              }
-              .folder-action-btn.create-btn {
-                background-color: #28a745;
-              }
-              .folder-action-btn.create-btn:hover {
-                background-color: #218838;
-              }
-              .folder-action-btn.orphan-btn {
-                background-color: #6c757d;
-              }
-              .folder-action-btn.orphan-btn:hover {
-                background-color: #5a6268;
-              }
-              .folder-warning-flash {
-                background-color: #d1ecf1;
-                border-left: 4px solid #17a2b8;
-                color: #0c5460;
-              }
-              .unassigned-folder-row {
-                background-color: #f8f9fa;
-              }
-              .unassigned-folder-row td {
-                color: #6c757d;
-                font-style: italic;
-              }
-              .unassigned-folder-row .folder-name {
-                color: #495057;
-                font-style: normal;
-              }
-            `;
-            document.head.appendChild(style);
-            
-            function createFolderButtons(folderName, folderPath, safeId, projectId) {
-              var container = document.createElement('span');
-              container.className = 'folder-action-buttons';
+            // Shared fetch helper
+            function swFetch(url, body, btn, successCb) {
+              btn.setAttribute('data-working', 'true');
+              btn.style.opacity = '0.5';
+              var csrf = document.querySelector('meta[name="csrf-token"]').content;
               
-              // Create subproject button
-              var createBtn = document.createElement('a');
-              createBtn.href = 'javascript:void(0)';
-              createBtn.className = 'folder-action-btn create-btn';
-              createBtn.innerHTML = '✓';
-              createBtn.title = i18n.create_subproject;
-              
-              // Orphan button
-              var orphanBtn = document.createElement('a');
-              orphanBtn.href = 'javascript:void(0)';
-              orphanBtn.className = 'folder-action-btn orphan-btn';
-              orphanBtn.innerHTML = '✗';
-              orphanBtn.title = i18n.move_to_orphaned;
-              
-              // Use projectId from folder data, or extract from URL if not available
-              var targetProjectId = projectId;
-              if (!targetProjectId) {
-                var pathParts = location.pathname.split('/');
-                var projectIndex = pathParts.indexOf('projects');
-                targetProjectId = projectIndex >= 0 && pathParts.length > projectIndex + 1 ? pathParts[projectIndex + 1] : null;
-              }
-              
-              // Hide buttons if no project context (global folders need different handling)
-              if (!targetProjectId) {
-                container.innerHTML = '<em style="font-size:0.8em;color:#666;">(use folder prompt)</em>';
-                return container;
-              }
-              
-              createBtn.addEventListener('click', function(e) {
-                e.preventDefault();
-                if (createBtn.getAttribute('data-working')) return;
-                
-                createBtn.setAttribute('data-working', 'true');
-                createBtn.style.opacity = '0.5';
-                createBtn.innerHTML = '...';
-                
-                var tokenMeta = document.querySelector('meta[name="csrf-token"]');
-                var csrfToken = tokenMeta ? tokenMeta.content : null;
-                
-                fetch('/projects/' + targetProjectId + '/subwikifiles/create_subproject_from_folder', {
-                  method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/json',
-                    'X-CSRF-Token': csrfToken
-                  },
-                  body: JSON.stringify({ folder_name: folderName, folder_path: folderPath })
-                })
-                .then(function(r) {
-                  if (!r.ok) {
-                    return r.text().then(function(text) {
-                      try { return JSON.parse(text); } catch(e) { throw new Error('Server error (' + r.status + ')'); }
-                    });
-                  }
-                  return r.json();
-                })
-                .then(function(data) {
-                  if (data.success) {
-                    // Redirect to new project settings
-                    window.location.href = '/projects/' + data.project_id + '/settings';
-                  } else {
-                    alert('Error: ' + (data.error || 'Unknown error'));
-                    createBtn.removeAttribute('data-working');
-                    createBtn.style.opacity = '1';
-                    createBtn.innerHTML = '✓';
-                  }
-                })
-                .catch(function(err) {
-                  alert('Error: ' + err.message);
-                  createBtn.removeAttribute('data-working');
-                  createBtn.style.opacity = '1';
-                  createBtn.innerHTML = '✓';
-                });
-              });
-              
-              orphanBtn.addEventListener('click', function(e) {
-                e.preventDefault();
-                if (orphanBtn.getAttribute('data-working')) return;
-                
-                orphanBtn.setAttribute('data-working', 'true');
-                orphanBtn.style.opacity = '0.5';
-                orphanBtn.innerHTML = '...';
-                
-                var tokenMeta = document.querySelector('meta[name="csrf-token"]');
-                var csrfToken = tokenMeta ? tokenMeta.content : null;
-                
-                fetch('/projects/' + targetProjectId + '/subwikifiles/orphan_folder', {
-                  method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/json',
-                    'X-CSRF-Token': csrfToken
-                  },
-                  body: JSON.stringify({ folder_name: folderName, folder_path: folderPath })
-                })
-                .then(function(r) {
-                  if (!r.ok) {
-                    return r.text().then(function(text) {
-                      try { return JSON.parse(text); } catch(e) { throw new Error('Server error (' + r.status + ')'); }
-                    });
-                  }
-                  return r.json();
-                })
-                .then(function(data) {
-                  if (data.success) {
-                    var entry = container.closest('.orphan-folder-entry');
-                    var flashBox = container.closest('.flash');
-                    
-                    if (entry) entry.remove();
-                    if (flashBox && !flashBox.querySelector('.orphan-folder-entry')) {
-                      flashBox.remove();
-                    }
-                  } else {
-                    alert('Error: ' + (data.error || 'Unknown error'));
-                    orphanBtn.removeAttribute('data-working');
-                    orphanBtn.style.opacity = '1';
-                    orphanBtn.innerHTML = '✗';
-                  }
-                })
-                .catch(function(err) {
-                  alert('Error: ' + err.message);
-                  orphanBtn.removeAttribute('data-working');
-                  orphanBtn.style.opacity = '1';
-                  orphanBtn.innerHTML = '✗';
-                });
-              });
-              
-              container.appendChild(createBtn);
-              container.appendChild(orphanBtn);
-              return container;
-            }
-            
-            // Inject folders into table view
-            function injectIntoTable(projectTable, folders) {
-              var foldersByParent = {};
-              folders.forEach(function(f) {
-                var key = f.parent_db_id || 'root';
-                if (!foldersByParent[key]) foldersByParent[key] = [];
-                foldersByParent[key].push(f);
-              });
-              
-              var existingRow = projectTable.querySelector('tr');
-              var colCount = existingRow ? existingRow.querySelectorAll('td').length : 3;
-              
-              Object.keys(foldersByParent).forEach(function(parentKey) {
-                var folderList = foldersByParent[parentKey];
-                var insertAfter = null;
-                var indentLevel = 0;
-                
-                if (parentKey !== 'root') {
-                  var parentRow = document.getElementById('project-' + parentKey);
-                  if (parentRow) {
-                    insertAfter = parentRow;
-                    var parentClasses = parentRow.className.match(/idnt-(\d+)/);
-                    indentLevel = parentClasses ? parseInt(parentClasses[1]) + 1 : 1;
-                  }
-                }
-                
-                folderList.forEach(function(folderInfo) {
-                  var row = document.createElement('tr');
-                  row.className = 'unassigned-folder-row' + (indentLevel > 0 ? ' idnt idnt-' + indentLevel : '');
-                  row.setAttribute('data-folder-id', folderInfo.id);
-                  
-                  var nameCell = document.createElement('td');
-                  nameCell.className = 'name';
-                  nameCell.innerHTML = '<span class="folder-name">📁 ' + folderInfo.name + '</span> ';
-                  nameCell.appendChild(createFolderButtons(folderInfo.name, folderInfo.path, folderInfo.id, folderInfo.project_id));
-                  row.appendChild(nameCell);
-                  
-                  for (var i = 1; i < colCount; i++) {
-                    var emptyCell = document.createElement('td');
-                    emptyCell.innerHTML = '—';
-                    row.appendChild(emptyCell);
-                  }
-                  
-                  if (insertAfter) {
-                    insertAfter.parentNode.insertBefore(row, insertAfter.nextElementSibling);
-                    insertAfter = row;
-                  } else {
-                    projectTable.appendChild(row);
-                  }
-                });
-              });
-            }
-            
-            // Inject folders into board view (nested lists)
-            function injectIntoBoard(projectBoard, folders) {
-              var foldersByParent = {};
-              folders.forEach(function(f) {
-                var key = f.parent_db_id || 'root';
-                if (!foldersByParent[key]) foldersByParent[key] = [];
-                foldersByParent[key].push(f);
-              });
-              
-              Object.keys(foldersByParent).forEach(function(parentKey) {
-                var folderList = foldersByParent[parentKey];
-                var targetList = null;
-                
-                if (parentKey === 'root') {
-                  // Find or create root list
-                  targetList = projectBoard.querySelector(':scope > ul.projects.root');
-                  if (!targetList) {
-                    targetList = projectBoard.querySelector(':scope > ul');
-                  }
+              fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
+                body: JSON.stringify(body)
+              }).then(function(r) { return r.json(); }).then(function(d) {
+                if (d.success) {
+                  successCb(d);
+                  var entry = document.querySelector('.orphan-folder-entry[data-id="' + safeId + '"]');
+                  if (entry) entry.remove();
+                  var box = document.querySelector('.folder-warning-flash');
+                  if (box && !box.querySelector('.orphan-folder-entry')) box.remove();
                 } else {
-                  // Find parent project's child list
-                  var parentLink = projectBoard.querySelector('a.project[href*="/' + folderList[0].project_id + '"]');
-                  if (parentLink) {
-                    var parentLi = parentLink.closest('li');
-                    if (parentLi) {
-                      targetList = parentLi.querySelector(':scope > ul.projects');
-                      if (!targetList) {
-                        targetList = document.createElement('ul');
-                        targetList.className = 'projects';
-                        parentLi.appendChild(targetList);
-                      }
-                    }
-                  }
+                  alert('Error: ' + (d.error || 'Unknown error'));
+                  btn.removeAttribute('data-working');
+                  btn.style.opacity = '1';
                 }
-                
-                if (!targetList) {
-                  targetList = projectBoard.querySelector('ul.projects') || projectBoard;
-                }
-                
-                folderList.forEach(function(folderInfo) {
-                  var li = document.createElement('li');
-                  li.className = 'child unassigned-folder-row';
-                  li.setAttribute('data-folder-id', folderInfo.id);
-                  
-                  var span = document.createElement('span');
-                  span.className = 'folder-name';
-                  span.innerHTML = folderInfo.name + ' ';
-                  span.appendChild(createFolderButtons(folderInfo.name, folderInfo.path, folderInfo.id, folderInfo.project_id));
-                  
-                  li.appendChild(span);
-                  targetList.appendChild(li);
-                });
+              }).catch(function(err) {
+                alert('Request failed: ' + err.message);
+                btn.removeAttribute('data-working');
+                btn.style.opacity = '1';
               });
             }
-            
-            document.addEventListener('DOMContentLoaded', function() {
-              if (!foldersData || foldersData.length === 0) return;
+
+            function swAddSidebarProject(name, identifier, parentIdentifier) {
+              var sidebar = document.querySelector('#mini-wiki-sidebar');
+              if (!sidebar) return;
+
+              // Find the parent project's node explicitly
+              var parentLink = sidebar.querySelector('a.type-project[href$="/projects/' + parentIdentifier + '"]') ||
+                               sidebar.querySelector('a.type-project[href*="/projects/' + parentIdentifier + '"]');
+              if (!parentLink) return;
               
-              // Prevent duplicate injection
-              if (document.querySelector('.folder-warning-flash') || document.querySelector('.unassigned-folder-row')) return;
+              var parentLi = parentLink.closest('li');
+              if (!parentLi) return;
+
+              // Subprojects are traditionally in a second UL list under the project node
+              // We filter only direct UL children to find the correct container
+              var uls = Array.from(parentLi.children).filter(function(c) { return c.tagName === 'UL'; });
+              var targetUl;
               
-              if (isProjectsList) {
-                // On /projects/ page: inject into project list
-                var projectTable = document.querySelector('table.list.projects tbody');
-                var projectBoard = document.getElementById('projects-index');
-                
-                if (projectTable) {
-                  injectIntoTable(projectTable, foldersData);
-                } else if (projectBoard) {
-                  injectIntoBoard(projectBoard, foldersData);
+              if (uls.length >= 2) {
+                targetUl = uls[1];
+              } else if (uls.length === 1) {
+                // If only one UL exists, check if it's the project list or pages list
+                if (uls[0].querySelector('a.type-project')) {
+                  targetUl = uls[0];
+                } else {
+                  targetUl = document.createElement('ul');
+                  parentLi.appendChild(targetUl);
                 }
               } else {
-                // On other pages: show flash message
-                var entriesHtml = foldersData.map(function(f) {
-                  var label = f.parent_name ? (f.parent_name + ' / ' + f.name) : f.name;
-                  return '<span class="orphan-folder-entry" data-folder-id="' + f.id + '">📁 ' + label + '</span>';
-                }).join(', ');
-                
-                var flashBox = document.createElement('div');
-                flashBox.className = 'flash notice folder-warning-flash';
-                flashBox.innerHTML = '<div class="folder-warning-content">' + 
-                  i18n.pending_folders.replace('%{details}', entriesHtml) + '</div>';
-                
-                var content = document.getElementById('content');
-                if (content) {
-                  content.insertBefore(flashBox, content.firstChild);
-                }
-                
-                foldersData.forEach(function(folderInfo) {
-                  var selector = '.orphan-folder-entry[data-folder-id="' + folderInfo.id + '"]';
-                  var entry = flashBox.querySelector(selector);
-                  if (entry) {
-                    entry.appendChild(createFolderButtons(folderInfo.name, folderInfo.path, folderInfo.id, folderInfo.project_id));
-                  }
-                });
+                targetUl = document.createElement('ul');
+                parentLi.appendChild(targetUl);
               }
+
+              var li = document.createElement('li');
+              li.className = 'expanded';
+              var iconHref = (sidebar.querySelector('use')?.getAttribute('href')?.split('#')[0] || '') + '#icon--folder';
+              
+              li.innerHTML = '<div class="node-label-container">' +
+                '<span class="expand-icon-spacer"></span>' +
+                '<a class="wiki-page-link type-project" href="/projects/' + identifier + '">' +
+                '<svg class="subnav-icon subnav-icon-folder" aria-hidden="true"><use href="' + iconHref + '"></use></svg>' +
+                '<span>' + name + '</span></a></div>';
+              
+              targetUl.appendChild(li);
+            }
+
+            // Determine project context early
+            var project_context = projectId;
+            if (!project_context) {
+               var parts = location.pathname.split('/');
+               var idx = parts.indexOf('projects');
+               if (idx >= 0 && parts.length > idx + 1) project_context = parts[idx+1];
+               if (project_context === 'new' || project_context === 'wiki') project_context = null;
+            }
+
+            // 1. Create (Green Check) - NOW AJAX
+            var checkBtn = document.createElement('a');
+            checkBtn.innerHTML = '✓';
+            checkBtn.className = 'folder-action-btn create-btn';
+            checkBtn.title = window.sw_v126_i18n.create_subproject;
+            checkBtn.href = 'javascript:void(0)';
+            
+            checkBtn.addEventListener('click', function(e) {
+              e.preventDefault();
+              if (checkBtn.getAttribute('data-working')) return;
+              if (!project_context) { alert('No project context found for creating subproject.'); return; }
+              
+              var url = '/projects/' + project_context + '/subwikifiles/create_subproject_from_folder';
+              swFetch(url, { folder_name: folderName, folder_path: folderPath }, checkBtn, function(data) {
+                console.log('RedmineSubwikifiles: AJAX project creation success for ' + folderName);
+                if (data && data.project_id) {
+                  swAddSidebarProject(folderName, data.project_id, project_context);
+                }
+              });
             });
-          })();
+            
+            // 2. Ignore (Grey Cross)
+            var ignoreBtn = document.createElement('a');
+            ignoreBtn.innerHTML = '✗';
+            ignoreBtn.className = 'folder-action-btn orphan-btn';
+            ignoreBtn.title = window.sw_v126_i18n.move_to_orphaned;
+            ignoreBtn.href = 'javascript:void(0)';
+            
+            ignoreBtn.addEventListener('click', function(e) {
+              e.preventDefault();
+              if (ignoreBtn.getAttribute('data-working')) return;
+              if (!project_context) { alert('No project context found for ignoring.'); return; }
+              
+              var url = '/projects/' + project_context + '/subwikifiles/orphan_folder';
+              swFetch(url, { folder_name: folderName, folder_path: folderPath }, ignoreBtn, function() {
+                console.log('RedmineSubwikifiles: AJAX folder ignore success for ' + folderName);
+              });
+            });
+            
+            container.appendChild(checkBtn);
+            container.appendChild(ignoreBtn);
+            
+            return container;
+          }
+
+          function swInject() {
+            if (window.sw_v126_done) return;
+            var cnt = document.querySelector('#projects-index') || document.querySelector('#content');
+            if (!cnt) return;
+            
+            if (document.querySelector('.folder-warning-flash')) return;
+
+            window.sw_v126_done = true;
+            console.log('RedmineSubwikifiles: swInject started');
+            
+            var b = document.createElement('div');
+            b.className = 'flash folder-warning-flash';
+            
+            var inner = '<div class="folder-warning-content">';
+            inner += '<strong>' + window.sw_v126_i18n.pending_folders.replace('%{details}.', '') + '</strong>&nbsp;&nbsp;';
+            window.sw_v126_folders.forEach(function(f) {
+              inner += '<span class="orphan-folder-entry" data-id="' + f.id + '">' + f.name + ' </span>';
+            });
+            inner += '</div>';
+            b.innerHTML = inner;
+            
+            cnt.insertBefore(b, cnt.firstChild);
+            window.sw_v126_folders.forEach(function(f) {
+              var e = b.querySelector('[data-id="' + f.id + '"]');
+              if (e) e.appendChild(createSwButtons(f.name, f.path, f.id, f.project_id));
+            });
+            console.log('RedmineSubwikifiles: v126FIX Done.');
+          }
+
+          if (document.readyState === 'complete') swInject();
+          window.addEventListener('load', swInject);
+          document.addEventListener('turbolinks:load', swInject);
+          setInterval(swInject, 3000);
+        })();
       JS
       
       js_code.html_safe
+    end
+
+    def build_folder_css(controller)
+      <<~CSS
+        .folder-action-btn { color: #fff !important; text-decoration: none !important; margin: 0 4px; padding: 2px 8px; border-radius: 4px; display: inline-block; font-weight: bold; }
+        .folder-action-btn.create-btn { background-color: #28a745; box-shadow: 0 1px 3px rgba(0,0,0,0.2); }
+        .folder-action-btn.orphan-btn { background-color: #6c757d; box-shadow: 0 1px 3px rgba(0,0,0,0.2); }
+        .folder-warning-flash { background-color: #e3f2fd !important; border: 1px solid #90caf9 !important; border-left: 5px solid #2196f3 !important; color: #0d47a1 !important; padding: 12px !important; margin-bottom: 20px !important; display: block !important; visibility: visible !important; }
+        .folder-warning-content { display: flex; align-items: center; flex-wrap: wrap; }
+        .orphan-folder-entry { margin-right: 15px; border-bottom: 1px dashed #2196f3; }
+      CSS
     end
     
     # Remove body hook as head is sufficient

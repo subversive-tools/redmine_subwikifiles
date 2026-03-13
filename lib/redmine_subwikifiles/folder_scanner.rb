@@ -38,17 +38,26 @@ module RedmineSubwikifiles
         # Check if this folder has a .project metadata file
         if has_project_metadata?(full_path)
           # It's an assigned subproject folder - skip it
-        else
-          # It's an unassigned folder
-          unassigned << {
-            path: full_path,
-            name: entry,
-            parent_project: @project,
-            misplaced: false,
-            relative_path: entry,
-            depth: 0
-          }
+          next
         end
+
+        # ADDITIONAL CHECK: Check if a project with this identifier or name already exists in Redmine
+        # This prevents folders from being flagged as "new" if the .project file was lost or not yet created
+        identifier = entry.downcase.gsub(/[^a-z0-9\-]/, '-').gsub(/\-+/, '-').gsub(/^\-|\-$/, '')
+        if Project.exists?(identifier: identifier) || Project.exists?(name: entry)
+          # It's already linked to a project - skip it
+          next
+        end
+
+        # It's a truly unassigned folder
+        unassigned << {
+          path: full_path,
+          name: entry,
+          parent_project: @project,
+          misplaced: false,
+          relative_path: entry,
+          depth: 0
+        }
       end
       
       unassigned

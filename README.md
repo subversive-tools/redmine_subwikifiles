@@ -1,6 +1,6 @@
 # Redmine Subwikifiles Plugin
 
-![Version](https://img.shields.io/badge/version-0.4.0-blue.svg)
+![Version](https://img.shields.io/badge/version-0.5.0-blue.svg)
 ![Redmine](https://img.shields.io/badge/Redmine-5.0%20%7C%206.0-red.svg?logo=redmine)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
@@ -18,7 +18,9 @@ Redmine Subwikifiles enables bidirectional synchronization between Redmine Wiki 
 - **Git Integration**: Automatically commits changes to a Git repository in the storage directory.
 - **Attachment Handling**: Syncs attachments between Redmine and a local `_attachments` folder.
 - **Conflict Detection**: Detects if the file on disk is newer than the database version.
-- **Folder Detection**: Automatically detects new folders and offers inline buttons to create subprojects or ignore them.
+- **Folder Detection**: Automatically detects new folders and offers inline AJAX buttons to create subprojects or ignore them.
+- **Project Inheritance**: New subprojects automatically inherit members, roles, enabled modules, and public status from their parent.
+- **Live UI Updates**: Sidebar navigation updates instantly upon project creation without page reload.
 - **Orphan File Handling**: Detects orphan files (missing frontmatter) and provides fix buttons.
 
 ## Screenshots
