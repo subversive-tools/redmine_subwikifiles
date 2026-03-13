@@ -541,33 +541,47 @@ module RedmineSubwikifiles
               var sidebar = document.querySelector('#mini-wiki-sidebar');
               if (!sidebar) return;
 
-              // Find the parent project's node explicitly
-              var parentLink = sidebar.querySelector('a.type-project[href$="/projects/' + parentIdentifier + '"]') ||
-                               sidebar.querySelector('a.type-project[href*="/projects/' + parentIdentifier + '"]');
-              if (!parentLink) return;
-              
-              var parentLi = parentLink.closest('li');
-              if (!parentLi) return;
-
-              // Subprojects are traditionally in a second UL list under the project node
-              // We filter only direct UL children to find the correct container
-              var uls = Array.from(parentLi.children).filter(function(c) { return c.tagName === 'UL'; });
               var targetUl;
               
-              if (uls.length >= 2) {
-                targetUl = uls[1];
-              } else if (uls.length === 1) {
-                // If only one UL exists, check if it's the project list or pages list
-                if (uls[0].querySelector('a.type-project')) {
-                  targetUl = uls[0];
+              if (parentIdentifier) {
+                // Find the parent project's node explicitly
+                var parentLink = sidebar.querySelector('a.type-project[href$="/projects/' + parentIdentifier + '"]') ||
+                                 sidebar.querySelector('a.type-project[href*="/projects/' + parentIdentifier + '"]');
+                if (!parentLink) return;
+                
+                var parentLi = parentLink.closest('li');
+                if (!parentLi) return;
+
+                // Subprojects are traditionally in a second UL list under the project node
+                var uls = Array.from(parentLi.children).filter(function(c) { return c.tagName === 'UL'; });
+                
+                if (uls.length >= 2) {
+                  targetUl = uls[1];
+                } else if (uls.length === 1) {
+                  // If only one UL exists, check if it's the project list or pages list
+                  if (uls[0].querySelector('a.type-project')) {
+                    targetUl = uls[0];
+                  } else {
+                    targetUl = document.createElement('ul');
+                    parentLi.appendChild(targetUl);
+                  }
                 } else {
                   targetUl = document.createElement('ul');
                   parentLi.appendChild(targetUl);
                 }
               } else {
-                targetUl = document.createElement('ul');
-                parentLi.appendChild(targetUl);
+                // Global context: append to root UL
+                targetUl = sidebar.querySelector('.mini-wiki-sidebar-content > ul');
+                if (!targetUl) {
+                  var contentWrapper = sidebar.querySelector('.mini-wiki-sidebar-content');
+                  if (contentWrapper) {
+                    targetUl = document.createElement('ul');
+                    contentWrapper.appendChild(targetUl);
+                  }
+                }
               }
+              
+              if (!targetUl) return;
 
               var li = document.createElement('li');
               li.className = 'expanded';
@@ -608,7 +622,7 @@ module RedmineSubwikifiles
 
               swFetch(url, { folder_name: folderName, folder_path: folderPath }, checkBtn, function(data) {
                 console.log('RedmineSubwikifiles: AJAX project creation success for ' + folderName);
-                if (data && data.project_id && project_context) {
+                if (data && data.project_id) {
                   swAddSidebarProject(folderName, data.project_id, project_context);
                 }
               });
