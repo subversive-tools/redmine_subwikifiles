@@ -426,6 +426,12 @@ module RedmineSubwikifiles
       is_projects_list = controller.controller_name == 'projects' && controller.action_name == 'index'
       is_new_project_page = controller.controller_name == 'projects' && controller.action_name == 'new'
       
+      # NEW SCOPE RESTRICTION: Only offer folders if we are on /projects or under a specific project
+      unless project || is_projects_list || is_new_project_page
+        Rails.logger.debug "RedmineSubwikifiles: Skipping folder notice (not on a projects page)"
+        return ''
+      end
+      
       Rails.logger.info "RedmineSubwikifiles: build_folder_js called. Context: proj_list=#{is_projects_list}, new_proj=#{is_new_project_page}, project=#{project&.identifier}"
       
       all_folders = []
@@ -444,8 +450,8 @@ module RedmineSubwikifiles
           end
           all_folders.concat(project_folders)
         end
-      elsif is_projects_list || is_new_project_page || User.current.admin?
-        # Scenario B: Global Context / Project List / Admin -> Scan global and/or all projects
+      elsif is_projects_list || is_new_project_page
+        # Scenario B: Global Context / Project List -> Scan global and/or all projects
         
         # 1. Scan Global
         if User.current.admin? || User.current.allowed_to?(:add_project, nil, global: true)
