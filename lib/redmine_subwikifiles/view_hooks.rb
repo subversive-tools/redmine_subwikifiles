@@ -601,12 +601,14 @@ module RedmineSubwikifiles
             checkBtn.addEventListener('click', function(e) {
               e.preventDefault();
               if (checkBtn.getAttribute('data-working')) return;
-              if (!project_context) { alert('No project context found for creating subproject.'); return; }
               
-              var url = '/projects/' + project_context + '/subwikifiles/create_subproject_from_folder';
+              var url = project_context ? 
+                '/projects/' + project_context + '/subwikifiles/create_subproject_from_folder' :
+                '/subwikifiles/create_subproject_from_folder';
+
               swFetch(url, { folder_name: folderName, folder_path: folderPath }, checkBtn, function(data) {
                 console.log('RedmineSubwikifiles: AJAX project creation success for ' + folderName);
-                if (data && data.project_id) {
+                if (data && data.project_id && project_context) {
                   swAddSidebarProject(folderName, data.project_id, project_context);
                 }
               });
@@ -622,9 +624,11 @@ module RedmineSubwikifiles
             ignoreBtn.addEventListener('click', function(e) {
               e.preventDefault();
               if (ignoreBtn.getAttribute('data-working')) return;
-              if (!project_context) { alert('No project context found for ignoring.'); return; }
               
-              var url = '/projects/' + project_context + '/subwikifiles/orphan_folder';
+              var url = project_context ? 
+                '/projects/' + project_context + '/subwikifiles/orphan_folder' :
+                '/subwikifiles/orphan_folder';
+                
               swFetch(url, { folder_name: folderName, folder_path: folderPath }, ignoreBtn, function() {
                 console.log('RedmineSubwikifiles: AJAX folder ignore success for ' + folderName);
               });

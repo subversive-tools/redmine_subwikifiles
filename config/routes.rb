@@ -1,5 +1,7 @@
 get 'subwikifiles/folder_prompt', to: 'subwikifiles#folder_prompt', as: 'global_subwikifiles_folder_prompt'
 post 'subwikifiles/assign_folder', to: 'subwikifiles#assign_folder', as: 'global_subwikifiles_assign_folder'
+post 'subwikifiles/create_subproject_from_folder', to: 'subwikifiles#create_subproject_from_folder', as: 'global_subwikifiles_create_subproject'
+post 'subwikifiles/orphan_folder', to: 'subwikifiles#orphan_folder', as: 'global_subwikifiles_orphan_folder'
 get 'projects/:project_id/subwikifiles', to: 'subwikifiles#folder_prompt'
 get 'projects/:project_id/subwikifiles/folder_prompt', to: 'subwikifiles#folder_prompt', as: 'project_subwikifiles_folder_prompt'
 post 'projects/:project_id/subwikifiles/assign_folder', to: 'subwikifiles#assign_folder', as: 'project_subwikifiles_assign_folder'

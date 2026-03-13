@@ -1,7 +1,7 @@
 # Handles advanced file operations like folder assignment, orphan file importing, and attachment synchronization.
 class SubwikifilesController < ApplicationController
   before_action :find_project
-  before_action :authorize_global, only: [:folder_prompt, :assign_folder]
+  before_action :authorize_global, only: [:folder_prompt, :assign_folder, :create_subproject_from_folder, :orphan_folder]
   
   # Displays a list of unassigned folders to the user for potential subproject creation.
   # Used primarily for global (top-level) folder detection.
@@ -220,11 +220,6 @@ class SubwikifilesController < ApplicationController
   
   # Create subproject from folder (AJAX).
   def create_subproject_from_folder
-    unless User.current.allowed_to?(:manage_subwikifiles, @project) || User.current.admin?
-      render json: { error: "Permission denied" }, status: :forbidden
-      return
-    end
-    
     folder_name = params[:folder_name]
     folder_path = params[:folder_path]
     
@@ -244,11 +239,6 @@ class SubwikifilesController < ApplicationController
   
   # Move folder to _orphaned (AJAX).
   def orphan_folder
-    unless User.current.allowed_to?(:manage_subwikifiles, @project) || User.current.admin?
-      render json: { error: "Permission denied" }, status: :forbidden
-      return
-    end
-    
     folder_name = params[:folder_name]
     folder_path = params[:folder_path]
     
