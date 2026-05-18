@@ -4,7 +4,7 @@ Redmine::Plugin.register :redmine_subwikifiles do
   author 'Stefan Mischke'
   description 'Bidirectional synchronization of Redmine Wiki pages and local Markdown files with integrated Git support.'
   version '0.5.0'
-  url 'https://github.com/modoq/redmine_subwikifiles'
+  url 'https://github.com/subversive-tools/redmine_subwikifiles'
   author_url 'https://github.com/modoq'
 
   # Default plugin settings
