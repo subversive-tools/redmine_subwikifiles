@@ -4,6 +4,7 @@ class FolderCreationTest < Redmine::IntegrationTest
   def setup
     @base_path = Dir.mktmpdir
     Setting.plugin_redmine_subwikifiles = { 'base_path' => @base_path, 'enabled' => 'true' }
+    Setting.clear_cache
 
     # Create a fresh admin user with a known password for log_user
     @admin = User.find_by(login: 'admin') || User.new(
