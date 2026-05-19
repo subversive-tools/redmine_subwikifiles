@@ -1,8 +1,6 @@
 require File.expand_path('../../test_helper', __FILE__)
 
 class ProjectSyncTest < Redmine::IntegrationTest
-  fixtures :projects, :users, :roles, :members, :member_roles, :enabled_modules
-
   def setup
     @base_path = Dir.mktmpdir
     # db_wins: Redmine name changes trigger actual folder renames
@@ -11,7 +9,10 @@ class ProjectSyncTest < Redmine::IntegrationTest
       'enabled'           => 'true',
       'conflict_strategy' => 'db_wins'
     }
-    @project = projects(:ecookbook)
+    @project = Project.create!(
+      name:       "SyncTest-#{SecureRandom.hex(4)}",
+      identifier: "sync-test-#{SecureRandom.hex(4)}"
+    )
     # Insert via SQL to bypass any EnabledModule name-validation timing issues
     unless @project.module_enabled?('redmine_subwikifiles')
       ActiveRecord::Base.connection.execute(
@@ -22,6 +23,7 @@ class ProjectSyncTest < Redmine::IntegrationTest
   end
 
   def teardown
+    @project.destroy if @project&.persisted?
     FileUtils.remove_entry @base_path if File.exist?(@base_path)
   end
 
@@ -34,7 +36,7 @@ class ProjectSyncTest < Redmine::IntegrationTest
 
     assert Dir.exist?(original_folder), "Original folder should exist before rename"
 
-    new_name = 'Renamed Wiki Project'
+    new_name = "Renamed-#{SecureRandom.hex(4)}"
     @project.name = new_name
     @project.save!
 
@@ -54,7 +56,7 @@ class ProjectSyncTest < Redmine::IntegrationTest
     RedmineSubwikifiles::FileStorage.write_project_metadata(original_folder, @project)
 
     original_identifier = @project.identifier
-    new_identifier      = 'renamed-identifier-test'
+    new_identifier      = "renamed-id-#{SecureRandom.hex(4)}"
 
     @project.identifier = new_identifier
     @project.save!
