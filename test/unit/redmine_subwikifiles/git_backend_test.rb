@@ -2,13 +2,20 @@ require File.expand_path('../../../test_helper', __FILE__)
 require 'mocha/minitest'
 
 class RedmineSubwikifiles::GitBackendTest < ActiveSupport::TestCase
-  fixtures :projects, :users
-
   def setup
     @base_path = Dir.mktmpdir
     Setting.plugin_redmine_subwikifiles = { 'base_path' => @base_path }
-    @project = projects(:ecookbook)
-    @user    = users(:admin)
+    @project = Project.create!(
+      name:       "GitBackendTest-#{SecureRandom.hex(4)}",
+      identifier: "git-test-#{SecureRandom.hex(4)}"
+    )
+    @user = User.create!(
+      login:     "git-user-#{SecureRandom.hex(4)}",
+      firstname: 'Git',
+      lastname:  'Tester',
+      mail:      "git-#{SecureRandom.hex(4)}@example.com",
+      admin:     true
+    )
 
     # Pre-create the .git marker so GitBackend#initialize skips init_repo
     project_path = RedmineSubwikifiles::FileStorage.new(@project).project_path
@@ -18,6 +25,8 @@ class RedmineSubwikifiles::GitBackendTest < ActiveSupport::TestCase
   end
 
   def teardown
+    @user.destroy    if @user&.persisted?
+    @project.destroy if @project&.persisted?
     FileUtils.rm_rf(@base_path) if @base_path && File.exist?(@base_path)
   end
 
