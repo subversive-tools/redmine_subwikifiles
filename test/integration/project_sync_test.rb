@@ -12,8 +12,13 @@ class ProjectSyncTest < Redmine::IntegrationTest
       'conflict_strategy' => 'db_wins'
     }
     @project = projects(:ecookbook)
-    @project.enabled_modules << EnabledModule.new(name: 'redmine_subwikifiles')
-    @project.save
+    # Insert via SQL to bypass any EnabledModule name-validation timing issues
+    unless @project.module_enabled?('redmine_subwikifiles')
+      ActiveRecord::Base.connection.execute(
+        "INSERT INTO enabled_modules (project_id, name) VALUES (#{@project.id}, 'redmine_subwikifiles')"
+      )
+    end
+    @project.reload
   end
 
   def teardown
