@@ -1,27 +1,17 @@
 require File.expand_path('../../test_helper', __FILE__)
 
-class FolderCreationTest < Redmine::IntegrationTest
+# Tests that the controller_projects_new_after_save hook creates the subproject
+# folder when a subproject is created.  We exercise the hook directly rather
+# than via a real HTTP POST so that the Setting written in setup is always
+# visible to the hook (avoids DB-connection isolation issues in integration
+# tests with transactional fixtures).
+class FolderCreationTest < ActiveSupport::TestCase
   def setup
     @base_path = Dir.mktmpdir
     Setting.plugin_redmine_subwikifiles = { 'base_path' => @base_path, 'enabled' => 'true' }
     Setting.clear_cache
 
-    # Create a fresh admin user with a known password for log_user
-    @admin = User.find_by(login: 'admin') || User.new(
-      login:     'admin',
-      firstname: 'Admin',
-      lastname:  'Test',
-      mail:      'admin@example.com',
-      admin:     true,
-      status:    User::STATUS_ACTIVE
-    )
-    unless @admin.persisted?
-      @admin.password = 'admin'
-      @admin.password_confirmation = 'admin'
-      @admin.save!
-    end
-
-    # Create parent project from scratch (no fixture dependency)
+    # Create a parent project and its on-disk folder with .project metadata
     @parent = Project.create!(
       name:       "ParentProject-#{SecureRandom.hex(4)}",
       identifier: "parent-proj-#{SecureRandom.hex(4)}"
@@ -31,14 +21,11 @@ class FolderCreationTest < Redmine::IntegrationTest
     FileUtils.mkdir_p(parent_folder)
     RedmineSubwikifiles::FileStorage.write_project_metadata(parent_folder, @parent)
 
-    # Enable redmine_subwikifiles module on the parent so the hook's
-    # project.parent.module_enabled?(:redmine_subwikifiles) check passes.
+    # Enable the module on the parent so module_enabled? check in the hook passes
     ActiveRecord::Base.connection.execute(
       "INSERT INTO enabled_modules (project_id, name) VALUES (#{@parent.id}, 'redmine_subwikifiles')"
     )
     @parent.reload
-
-    log_user('admin', 'admin')
   end
 
   def teardown
@@ -50,21 +37,19 @@ class FolderCreationTest < Redmine::IntegrationTest
     new_identifier = "new-sub-#{SecureRandom.hex(4)}"
     new_name       = "NewSub-#{SecureRandom.hex(4)}"
 
-    assert_difference 'Project.count' do
-      post '/projects', params: {
-        project: {
-          name:                 new_name,
-          identifier:           new_identifier,
-          parent_id:            @parent.id,
-          enabled_module_names: ['redmine_subwikifiles']
-        }
-      }
-    end
+    sub = Project.create!(
+      name:       new_name,
+      identifier: new_identifier,
+      parent_id:  @parent.id
+    )
+    ActiveRecord::Base.connection.execute(
+      "INSERT INTO enabled_modules (project_id, name) VALUES (#{sub.id}, 'redmine_subwikifiles')"
+    )
+    sub.reload
 
-    sub = Project.find_by_identifier(new_identifier)
-    assert sub, 'Subproject should have been created'
+    # Invoke the hook the same way ProjectsController#create does after save
+    Redmine::Hook.call_hook(:controller_projects_new_after_save, project: sub)
 
-    # The hook creates the folder inside the parent folder
     sub_folder = RedmineSubwikifiles::FileStorage.new(sub).project_path
     assert Dir.exist?(sub_folder), "Subproject folder should have been created at #{sub_folder}"
   ensure
