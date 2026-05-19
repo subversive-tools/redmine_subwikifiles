@@ -31,9 +31,8 @@ module RedmineSubwikifiles
       storage = RedmineSubwikifiles::FileStorage.new(project)
       project_path = storage.project_path
       
-      # Only create folder if it doesn't exist AND no folder with .project file was found
-      # (folder with .project means it was created via folder detection)
-      if project_path.include?(project.identifier) && !Dir.exist?(project_path)
+      # Create folder if it doesn't already exist
+      unless Dir.exist?(project_path)
         FileUtils.mkdir_p(project_path)
         # Also create .project metadata file
         RedmineSubwikifiles::FileStorage.write_project_metadata(project_path, project)
