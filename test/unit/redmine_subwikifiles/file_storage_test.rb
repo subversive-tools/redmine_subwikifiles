@@ -1,16 +1,18 @@
-require File.expand_path('../../../../test_helper', __FILE__)
+require File.expand_path('../../../test_helper', __FILE__)
 
 class RedmineSubwikifiles::FileStorageTest < ActiveSupport::TestCase
+  fixtures :projects
+
   def setup
-    @project = Project.find(1) # Assuming project with ID 1 exists in test fixtures
+    @base_path = Dir.mktmpdir
+    Setting.plugin_redmine_subwikifiles = { 'base_path' => @base_path }
+    @project = projects(:ecookbook)
     @storage = RedmineSubwikifiles::FileStorage.new(@project)
-    @base_path = Setting.plugin_redmine_subwikifiles['base_path']
-    @project_path = File.join(@base_path, @project.identifier)
+    @project_path = @storage.project_path
   end
 
   def teardown
-    # Clean up created files
-    FileUtils.rm_rf(@project_path) if File.exist?(@project_path)
+    FileUtils.rm_rf(@base_path) if @base_path && File.exist?(@base_path)
   end
 
   def test_write_creates_file
@@ -43,13 +45,8 @@ class RedmineSubwikifiles::FileStorageTest < ActiveSupport::TestCase
   end
 
   def test_file_path_sanitization
-    title = "Page / with / slashes"
-    # "Page / with / slashes" -> "Page_/_with_/_slashes.md" (spaces to _, keep /)
-    # The implementation: title.gsub(' ', '_').gsub(/[^\w\/\-]/, '')
-    # "Page_/_with_/_slashes"
-    
-    path = @storage.file_path(title)
-    expected_suffix = "Page_/_with_/_slashes.md"
-    assert_match /#{Regexp.escape(expected_suffix)}$/, path
+    # sanitize_filename: spaces → underscores, non-word/non-hyphen chars removed
+    path = @storage.file_path("My Test Page")
+    assert_match /My_Test_Page\.md$/, path
   end
 end
