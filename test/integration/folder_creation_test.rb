@@ -30,6 +30,13 @@ class FolderCreationTest < Redmine::IntegrationTest
     FileUtils.mkdir_p(parent_folder)
     RedmineSubwikifiles::FileStorage.write_project_metadata(parent_folder, @parent)
 
+    # Enable redmine_subwikifiles module on the parent so the hook's
+    # project.parent.module_enabled?(:redmine_subwikifiles) check passes.
+    ActiveRecord::Base.connection.execute(
+      "INSERT INTO enabled_modules (project_id, name) VALUES (#{@parent.id}, 'redmine_subwikifiles')"
+    )
+    @parent.reload
+
     log_user('admin', 'admin')
   end
 
