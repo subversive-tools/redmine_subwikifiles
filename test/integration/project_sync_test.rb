@@ -60,11 +60,13 @@ class ProjectSyncTest < Redmine::IntegrationTest
     assert_includes initial_metadata, "id: #{@project.identifier}",
                     "Initial .project metadata should contain the original identifier"
 
-    # Simulate identifier change: update identifier and rewrite metadata
-    # (This tests the write_project_metadata mechanism that the after_save hook uses)
+    # Simulate identifier change by writing metadata with a new identifier.
+    # We use a Struct rather than mutating @project.identifier because Redmine's
+    # Project model may not allow in-memory identifier changes after creation.
+    # write_project_metadata only calls .identifier and .name, so a simple Struct works.
     new_identifier = "renamed-id-#{SecureRandom.hex(4)}"
-    @project.identifier = new_identifier
-    RedmineSubwikifiles::FileStorage.write_project_metadata(original_folder, @project)
+    updated_project = Struct.new(:identifier, :name).new(new_identifier, @project.name)
+    RedmineSubwikifiles::FileStorage.write_project_metadata(original_folder, updated_project)
 
     # The folder keeps its name (named after project name, not identifier)
     # and .project metadata is updated to reflect the new identifier
