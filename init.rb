@@ -36,10 +36,13 @@ begin
   require File.expand_path('../lib/redmine_subwikifiles/file_scanner', __FILE__)
   require File.expand_path('../lib/redmine_subwikifiles/wiki_importer', __FILE__)
   
-  # 2. Setup View Hooks (for UI element injection)
+  # 2. Setup Hooks (controller hooks: subproject folder creation, etc.)
+  require File.expand_path('../lib/redmine_subwikifiles/hooks', __FILE__)
+
+  # 3. Setup View Hooks (for UI element injection)
   require File.expand_path('../lib/redmine_subwikifiles/view_hooks', __FILE__)
   
-  # 3. Apply Model Patches
+  # 4. Apply Model Patches
   # Patch WikiContent: Handle file write-back on wiki save
   require File.expand_path('../lib/redmine_subwikifiles/wiki_content_patch', __FILE__)
   Rails.logger.info "RedmineSubwikifiles: Patching WikiContent"
@@ -50,7 +53,7 @@ begin
   Rails.logger.info "RedmineSubwikifiles: Patching WikiPage"
   WikiPage.send(:include, RedmineSubwikifiles::WikiPagePatch)
   
-  # 4. Apply Controller Patches
+  # 5. Apply Controller Patches
   # Patch WikiController: Handle file synchronization on page load
   require File.expand_path('../lib/redmine_subwikifiles/wiki_controller_patch', __FILE__)
   Rails.logger.info "RedmineSubwikifiles: Patching WikiController"
