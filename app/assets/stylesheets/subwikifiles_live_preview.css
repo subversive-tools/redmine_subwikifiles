@@ -1,0 +1,97 @@
+/* Subwikifiles: HedgeDoc-style live split preview in the wiki editor */
+.jstTabs ul li a.tab-split {
+  position: relative;
+}
+.jstBlock .swf-split-divider {
+  display: none;
+}
+.jstBlock.swf-split .jstEditor {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  --swf-split-ratio: 50%;
+}
+.jstBlock.swf-split .jstEditor textarea.wiki-edit {
+  flex: 0 0 calc(var(--swf-split-ratio, 50%) - 4px);
+  width: calc(var(--swf-split-ratio, 50%) - 4px) !important;
+  min-width: 160px;
+  margin: 0;
+  box-sizing: border-box;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.jstBlock.swf-split .jstEditor .swf-split-divider {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 8px;
+  width: 8px;
+  cursor: col-resize;
+  user-select: none;
+  position: relative;
+}
+.jstBlock.swf-split .jstEditor .swf-split-divider::before {
+  content: "";
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  background: rgba(140, 149, 159, 0.35);
+  transition: background-color 0.15s, width 0.15s;
+}
+.jstBlock.swf-split .jstEditor .swf-split-divider::after {
+  content: "";
+  width: 4px;
+  height: 28px;
+  border-radius: 2px;
+  background: rgba(140, 149, 159, 0.55);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4);
+  z-index: 1;
+  transition: background-color 0.15s, transform 0.15s;
+}
+.jstBlock.swf-split .jstEditor .swf-split-divider:hover::before,
+.jstBlock.swf-split.swf-dragging .jstEditor .swf-split-divider::before {
+  width: 2px;
+  background: rgba(9, 105, 218, 0.65);
+}
+.jstBlock.swf-split .jstEditor .swf-split-divider:hover::after,
+.jstBlock.swf-split.swf-dragging .jstEditor .swf-split-divider::after {
+  background: #0969da;
+  transform: scaleY(1.15);
+}
+.jstBlock.swf-split.swf-dragging,
+.jstBlock.swf-split.swf-dragging * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+.jstBlock.swf-split .jstEditor .wiki-preview {
+  display: block !important;
+  flex: 1 1 0;
+  width: auto !important;
+  min-width: 160px;
+  margin: 0;
+  box-sizing: border-box;
+  overflow-y: auto;
+  padding: 8px 12px;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+.jstBlock.swf-split .jstEditor .wiki-preview.swf-updating {
+  opacity: 0.92;
+}
+@media (max-width: 900px) {
+  .jstBlock.swf-split .jstEditor {
+    flex-direction: column;
+    gap: 6px;
+  }
+  .jstBlock.swf-split .jstEditor .swf-split-divider {
+    display: none;
+  }
+  .jstBlock.swf-split .jstEditor textarea.wiki-edit,
+  .jstBlock.swf-split .jstEditor .wiki-preview {
+    width: 100% !important;
+    flex: 1 1 auto;
+  }
+}

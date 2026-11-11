@@ -24,3 +24,11 @@
   <br>
   <em class="info"><%= l('redmine_subwikifiles.help_conflict_strategy') %></em>
 </p>
+
+<p>
+  <label><%= l('redmine_subwikifiles.label_live_preview') %></label>
+  <%= hidden_field_tag 'settings[live_preview]', '0' %>
+  <%= check_box_tag 'settings[live_preview]', '1', RedmineSubwikifiles.live_preview_enabled? %>
+  <br>
+  <em class="info"><%= l('redmine_subwikifiles.help_live_preview') %></em>
+</p>
