@@ -1,4 +1,0 @@
-base_path: '/var/lib/redmine/wiki_files'
-enabled: false
-git_enabled: true
-conflict_strategy: 'file_wins'
