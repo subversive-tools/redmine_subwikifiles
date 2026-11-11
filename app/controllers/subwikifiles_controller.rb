@@ -90,28 +90,15 @@ class SubwikifilesController < ApplicationController
         next nil
       end
       
-      raw_content = File.read(file_path)
-      metadata = {}
-      content = raw_content
-      
-      if raw_content =~ /\A---\s*\n(.*?)\n---\s*\n(.*)\z/m
-        frontmatter_text = $1
-        content = $2.strip
-        content = "(empty content)" if content.blank?
-        
-        frontmatter_text.each_line do |line|
-          if line =~ /^(\w+):\s*(.+)$/
-            metadata[$1] = $2.strip
-          end
-        end
-      end
+      raw_content = File.read(file_path, encoding: 'UTF-8')
+      parsed = RedmineSubwikifiles::FrontmatterParser.parse(raw_content)
+      metadata = parsed[:metadata].is_a?(Hash) ? parsed[:metadata].dup : {}
+      content = parsed[:content].to_s.strip.presence || '(empty content)'
       
       if parent_page_title.present? && !metadata['parent']
         metadata['parent'] = parent_page_title
         Rails.logger.info "RedmineSubwikifiles: fix_frontmatter - Assigned parent '#{parent_page_title}' to '#{name}'"
       end
-      
-      content = "(empty content)" if content.blank?
       
       {
         filename: name,
@@ -150,51 +137,20 @@ class SubwikifilesController < ApplicationController
       return
     end
     
-    storage = RedmineSubwikifiles::FileStorage.new(@project)
-    file_path = File.join(storage.project_path, file_name)
-    
-    unless File.exist?(file_path)
-      render json: { error: "File not found on disk: #{file_name}" }, status: :not_found
-      return
-    end
-    
     # Identify container
     container = nil
     if params[:page_id].present? && @project.wiki
        container = @project.wiki.pages.find_by(id: params[:page_id]) || 
                    @project.wiki.pages.find_by(title: params[:page_id])
     end
-    container ||= @project.wiki || @project
     
-    attachment = Attachment.new
-    attachment.file = File.open(file_path)
-    attachment.author = User.current
-    attachment.container = container
-    attachment.filename = file_name
-    
-    if attachment.save
-      Rails.logger.info "RedmineSubwikifiles: Attached file '#{file_name}' to #{container.class.name} #{container.id}"
-      
-      # Move file to _attachments folder
-      begin
-        attachments_dir = File.join(storage.project_path, '_attachments')
-        FileUtils.mkdir_p(attachments_dir)
-        
-        target_path = File.join(attachments_dir, file_name)
-        if File.exist?(target_path)
-          timestamp = Time.now.strftime('%Y%m%d%H%M%S')
-          target_path = File.join(attachments_dir, "#{File.basename(file_name, '.*')}_#{timestamp}#{File.extname(file_name)}")
-        end
-        
-        FileUtils.mv(file_path, target_path)
-        Rails.logger.info "RedmineSubwikifiles: Moved '#{file_name}' to '#{target_path}'"
-      rescue => e
-        Rails.logger.error "RedmineSubwikifiles: Failed to move attached file: #{e.message}"
-      end
-      
-      render json: { success: true, file: file_name, container: container.class.name }
+    result = RedmineSubwikifiles::AttachmentImporter.attach(@project, file_name, container)
+    if result[:success]
+      render json: { success: true, file: file_name, container: result[:container].class.name }
+    elsif result[:error].to_s.start_with?('File not found')
+      render json: { error: result[:error] }, status: :not_found
     else
-      render json: { error: attachment.errors.full_messages.join(', ') }, status: :unprocessable_entity
+      render json: { error: result[:error] }, status: :unprocessable_entity
     end
   end
 
@@ -210,12 +166,77 @@ class SubwikifilesController < ApplicationController
     
     if page && page.content
       page.content.write_to_md_file_with_frontmatter
-      flash[:notice] = I18n.t('redmine_subwikifiles.notices.file_restored', file: "#{title}.md")
+      storage = RedmineSubwikifiles::FileStorage.new(@project)
+      if page.content.subwikifiles_write_error.nil? && storage.file_exists?(title)
+        flash[:notice] = I18n.t('redmine_subwikifiles.notices.file_restored', file: "#{title}.md")
+      else
+        flash[:error] = I18n.t('redmine_subwikifiles.errors.file_restore_failed',
+                               file: storage.file_path(title),
+                               error: page.content.subwikifiles_write_error || '-')
+      end
     else
       flash[:error] = I18n.t('redmine_subwikifiles.errors.page_not_found', page: title)
     end
     
     redirect_back(fallback_location: project_wiki_path(@project, title))
+  end
+
+  # Dry-run plan of all sync actions around the current page (JSON for the sync popover).
+  def plan
+    return render_403 unless @project && User.current.allowed_to?(:edit_wiki_pages, @project)
+
+    plan = build_sync_plan
+    render json: plan.as_json_for(view_context)
+  end
+
+  # Automatic sync (called in the background after a wiki page loaded):
+  # applies all unambiguous actions in the whole tree, returns the remaining plan (JSON).
+  def auto
+    return render_403 unless @project && User.current.allowed_to?(:edit_wiki_pages, @project)
+
+    # Throttle: the automatic run happens at most once per AUTO_INTERVAL per project tree
+    # (across all users); otherwise only the read-only plan is returned.
+    stats = Hash.new(0)
+    stats[:errors] = []
+    throttled = !RedmineSubwikifiles.throttle_slot?("auto/#{@project.root.id}")
+    stats = build_sync_plan.apply('tree', {}, only_certain: true) unless throttled
+    done = stats[:to_wiki] + stats[:to_file] + stats[:created] + stats[:imported]
+    plan = build_sync_plan
+    render json: plan.as_json_for(view_context).merge(
+      auto: { done: done, to_wiki: stats[:to_wiki], to_file: stats[:to_file] + stats[:created],
+              imported: stats[:imported], errors: stats[:errors], throttled: throttled,
+              current_page_changed: stats[:current_page_changed] }
+    )
+  end
+
+  # Applies the plan for a scope. Conflicts/deleted files use params[:decisions][key].
+  def apply
+    return render_403 unless @project && User.current.allowed_to?(:edit_wiki_pages, @project)
+
+    scope = RedmineSubwikifiles::SyncPlan::SCOPES.include?(params[:scope]) ? params[:scope] : 'page'
+    decisions = params[:decisions].respond_to?(:to_unsafe_h) ? params[:decisions].to_unsafe_h : (params[:decisions] || {})
+    stats = build_sync_plan.apply(scope, decisions.to_h.transform_values(&:to_s))
+
+    parts = []
+    parts << "↓ #{stats[:to_wiki]}" if stats[:to_wiki] > 0
+    parts << "↑ #{stats[:to_file] + stats[:created]}" if stats[:to_file] + stats[:created] > 0
+    parts << "+ #{stats[:imported]}" if stats[:imported] > 0
+    parts << "📎 #{stats[:attached]}" if stats[:attached] > 0
+    parts << l('redmine_subwikifiles.sync.deleted_pages', count: stats[:deleted_pages]) if stats[:deleted_pages] > 0
+    parts << l('redmine_subwikifiles.sync.deleted_files', count: stats[:deleted_files]) if stats[:deleted_files] > 0
+    msg = l('redmine_subwikifiles.sync.applied', changes: parts.any? ? parts.join(' · ') : '0')
+    msg += ' ' + l('redmine_subwikifiles.sync.skipped', count: stats[:skipped]) if stats[:skipped] > 0
+    msg += ' ' + l('redmine_subwikifiles.sync.placeholders', count: stats[:placeholders]) if stats[:placeholders] > 0
+    flash[:notice] = msg
+
+    if stats[:errors].any?
+      shown = stats[:errors].first(10).map { |e| ERB::Util.html_escape(e) }
+      shown << "… (+#{stats[:errors].size - 10})" if stats[:errors].size > 10
+      flash[:error] = ERB::Util.html_escape(l('redmine_subwikifiles.sync.errors', count: stats[:errors].size)) +
+                      '<br>'.html_safe + shown.join('<br>').html_safe
+    end
+
+    redirect_back(fallback_location: project_wiki_index_path(@project))
   end
   
   # Create subproject from folder (AJAX).
@@ -258,6 +279,11 @@ class SubwikifilesController < ApplicationController
   
   private
   
+  def build_sync_plan
+    page = params[:page].present? && @project.wiki ? @project.wiki.find_page(params[:page]) : nil
+    RedmineSubwikifiles::SyncPlan.new(@project, page: page).build
+  end
+
   def find_project
     if params[:project_id].present?
       @project = Project.find(params[:project_id])
@@ -356,7 +382,7 @@ class SubwikifilesController < ApplicationController
       storage = RedmineSubwikifiles::FileStorage.new(@project)
       project_path = storage.project_path
     else
-      project_path = Setting.plugin_redmine_subwikifiles['base_path'] || '/var/lib/redmine/wiki_files'
+      project_path = RedmineSubwikifiles.base_path
     end
     
     # Create _orphaned directory if needed

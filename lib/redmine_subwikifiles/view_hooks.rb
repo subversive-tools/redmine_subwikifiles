@@ -33,7 +33,7 @@ module RedmineSubwikifiles
         file_path = controller.instance_variable_get(:@associated_file_path)
         if file_path
            # Calculate relative path from base
-           base_dir = Setting.plugin_redmine_subwikifiles['base_path'] || '/var/lib/redmine/wiki_files'
+           base_dir = RedmineSubwikifiles.base_path
            relative_path = file_path.sub(base_dir, '')
            
            # Ensure it starts with /
@@ -91,11 +91,6 @@ module RedmineSubwikifiles
       end
       
       response
-    end
-
-    # Global hook for body bottom - apparently not reliable, so logic moved to head
-    def view_layouts_base_body_bottom(context = {})
-      # No-op now
     end
 
     private
@@ -266,6 +261,7 @@ module RedmineSubwikifiles
                       // Move cursor after the inserted link
                       textarea.selectionStart = textarea.selectionEnd = cursorPosition + link.length;
                       textarea.focus();
+                      textarea.dispatchEvent(new Event('input', { bubbles: true }));
                       
                       // Robust removal logic
                       var entry = btn.closest('.orphan-file-entry');
@@ -482,237 +478,183 @@ module RedmineSubwikifiles
       Rails.logger.info "RedmineSubwikifiles: Total folders found: #{all_folders.count}"
       return '' if all_folders.empty?
       
+      project_names = Project.where(identifier: all_folders.map { |f| f[:parent_project_id] }.compact.uniq).pluck(:identifier, :name).to_h
       folder_data = all_folders.map do |f|
         safe_id = Base64.strict_encode64("#{f[:parent_project_id] || 'global'}-#{f[:name]}").gsub(/[^a-zA-Z0-9]/, '')
         {
           id: safe_id,
           name: f[:name],
           path: f[:path],
-          project_id: f[:parent_project_id]
+          project_id: f[:parent_project_id],
+          project_name: project_names[f[:parent_project_id]]
         }
       end
 
-      pending_folders_json = folder_data.to_json
-      translations = {
-        create_subproject: I18n.t('redmine_subwikifiles.folder_sync.create_subproject'),
-        move_to_orphaned: I18n.t('redmine_subwikifiles.folder_sync.move_to_orphaned'),
-        pending_folders: I18n.t('redmine_subwikifiles.folder_sync.pending_folders', details: '%{details}', count: folder_data.count)
+      # Icons/buttons rendered like Redmine's own links so every theme styles them
+      view = controller.view_context
+      icon = ->(name, label) { view.respond_to?(:sprite_icon) ? view.sprite_icon(name, label).to_s : ERB::Util.html_escape(label) }
+      t = ->(k, **o) { I18n.t("redmine_subwikifiles.folder_ui.#{k}", **o) }
+      only_parent = folder_data.map { |f| f[:project_id] }.uniq
+      title =
+        if only_parent.size == 1 && only_parent.first
+          t.(:title_project, count: folder_data.size, project: project_names[only_parent.first])
+        else
+          t.(:title_global, count: folder_data.size)
+        end
+      ui = {
+        title: title,
+        create: t.(:create),
+        create_html: icon.('add', t.(:create)),
+        ignore_html: icon.('close', t.(:ignore)),
+        folder_html: view.respond_to?(:sprite_icon) ? view.sprite_icon('folder').to_s : '',
+        create_tip_global: t.(:create_tip_global),
+        create_tip_sub: t.(:create_tip_sub),
+        ignore_tip: t.(:ignore_tip),
+        in_project: t.(:in_project),
+        created: t.(:created),
+        ignored: t.(:ignored),
+        working: t.(:working),
+        error: t.(:error)
       }
-      
+
       js_code = <<~JS
-        /* RedmineSubwikifiles v126FIX */
+        /* RedmineSubwikifiles: new folder question */
         (function() {
-          var vKey = 'sw_v126_loaded';
-          if (window[vKey]) { console.log('RedmineSubwikifiles: v126FIX already running'); return; }
-          window[vKey] = true;
+          if (window.swFolderPrompt) return;
+          window.swFolderPrompt = true;
+          var folders = #{folder_data.to_json};
+          var ui = #{ui.to_json};
 
-          console.log('RedmineSubwikifiles: v126FIX Inline script starting...');
-          window.sw_v126_folders = #{pending_folders_json};
-          window.sw_v126_i18n = #{translations.to_json};
-          
-          function createSwButtons(folderName, folderPath, safeId, projectId) {
-            var container = document.createElement('span');
-            container.className = 'folder-action-container';
-            
-            // Shared fetch helper
-            function swFetch(url, body, btn, successCb) {
-              btn.setAttribute('data-working', 'true');
-              btn.style.opacity = '0.5';
-              var csrf = document.querySelector('meta[name="csrf-token"]').content;
-              
-              fetch(url, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
-                body: JSON.stringify(body)
-              }).then(function(r) { return r.json(); }).then(function(d) {
-                if (d.success) {
-                  successCb(d);
-                  var entry = document.querySelector('.orphan-folder-entry[data-id="' + safeId + '"]');
-                  if (entry) entry.remove();
-                  var box = document.querySelector('.folder-warning-flash');
-                  if (box && !box.querySelector('.orphan-folder-entry')) box.remove();
-                } else {
-                  alert('Error: ' + (d.error || 'Unknown error'));
-                  btn.removeAttribute('data-working');
-                  btn.style.opacity = '1';
-                }
-              }).catch(function(err) {
-                alert('Request failed: ' + err.message);
-                btn.removeAttribute('data-working');
-                btn.style.opacity = '1';
-              });
-            }
+          function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+          function fmt(s, v) { return String(s || '').replace(/%\\{(\\w+)\\}/g, function (_, k) { return v[k] != null ? v[k] : ''; }); }
 
-            function swAddSidebarProject(name, identifier, parentIdentifier) {
-              var sidebar = document.querySelector('#mini-wiki-sidebar');
-              if (!sidebar) return;
-
-              var targetUl;
-              
-              if (parentIdentifier) {
-                // Find the parent project's node explicitly
-                var parentLink = sidebar.querySelector('a.type-project[href$="/projects/' + parentIdentifier + '"]') ||
-                                 sidebar.querySelector('a.type-project[href*="/projects/' + parentIdentifier + '"]');
-                if (!parentLink) return;
-                
-                var parentLi = parentLink.closest('li');
-                if (!parentLi) return;
-
-                // Subprojects are traditionally in a second UL list under the project node
-                var uls = Array.from(parentLi.children).filter(function(c) { return c.tagName === 'UL'; });
-                
-                if (uls.length >= 2) {
-                  targetUl = uls[1];
-                } else if (uls.length === 1) {
-                  // If only one UL exists, check if it's the project list or pages list
-                  if (uls[0].querySelector('a.type-project')) {
-                    targetUl = uls[0];
-                  } else {
-                    targetUl = document.createElement('ul');
-                    parentLi.appendChild(targetUl);
-                  }
-                } else {
-                  targetUl = document.createElement('ul');
-                  parentLi.appendChild(targetUl);
-                }
-              } else {
-                // Global context: append to root UL
-                targetUl = sidebar.querySelector('.mini-wiki-sidebar-content > ul');
-                if (!targetUl) {
-                  var contentWrapper = sidebar.querySelector('.mini-wiki-sidebar-content');
-                  if (contentWrapper) {
-                    targetUl = document.createElement('ul');
-                    contentWrapper.appendChild(targetUl);
-                  }
-                }
-              }
-              
-              if (!targetUl) return;
-
-              var li = document.createElement('li');
-              li.className = 'expanded';
-              var iconHref = (sidebar.querySelector('use')?.getAttribute('href')?.split('#')[0] || '') + '#icon--folder';
-              
-              li.innerHTML = '<div class="node-label-container">' +
-                '<span class="expand-icon-spacer"></span>' +
-                '<a class="wiki-page-link type-project" href="/projects/' + identifier + '">' +
-                '<svg class="subnav-icon subnav-icon-folder" aria-hidden="true"><use href="' + iconHref + '"></use></svg>' +
-                '<span>' + name + '</span></a></div>';
-              
-              targetUl.appendChild(li);
-            }
-
-            // Determine project context early
-            var project_context = projectId;
-            if (!project_context) {
-               var parts = location.pathname.split('/');
-               var idx = parts.indexOf('projects');
-               if (idx >= 0 && parts.length > idx + 1) project_context = parts[idx+1];
-               if (project_context === 'new' || project_context === 'wiki') project_context = null;
-            }
-
-            // 1. Create (Green Check) - NOW AJAX
-            var checkBtn = document.createElement('a');
-            checkBtn.innerHTML = '✓';
-            checkBtn.className = 'folder-action-btn create-btn';
-            checkBtn.title = window.sw_v126_i18n.create_subproject;
-            checkBtn.href = 'javascript:void(0)';
-            
-            checkBtn.addEventListener('click', function(e) {
-              e.preventDefault();
-              if (checkBtn.getAttribute('data-working')) return;
-              
-              var url = project_context ? 
-                '/projects/' + project_context + '/subwikifiles/create_subproject_from_folder' :
-                '/subwikifiles/create_subproject_from_folder';
-
-              swFetch(url, { folder_name: folderName, folder_path: folderPath }, checkBtn, function(data) {
-                console.log('RedmineSubwikifiles: AJAX project creation success for ' + folderName);
-                if (data && data.project_id) {
-                  swAddSidebarProject(folderName, data.project_id, project_context);
-                }
-              });
-            });
-            
-            // 2. Ignore (Grey Cross)
-            var ignoreBtn = document.createElement('a');
-            ignoreBtn.innerHTML = '✗';
-            ignoreBtn.className = 'folder-action-btn orphan-btn';
-            ignoreBtn.title = window.sw_v126_i18n.move_to_orphaned;
-            ignoreBtn.href = 'javascript:void(0)';
-            
-            ignoreBtn.addEventListener('click', function(e) {
-              e.preventDefault();
-              if (ignoreBtn.getAttribute('data-working')) return;
-              
-              var url = project_context ? 
-                '/projects/' + project_context + '/subwikifiles/orphan_folder' :
-                '/subwikifiles/orphan_folder';
-                
-              swFetch(url, { folder_name: folderName, folder_path: folderPath }, ignoreBtn, function() {
-                console.log('RedmineSubwikifiles: AJAX folder ignore success for ' + folderName);
-              });
-            });
-            
-            container.appendChild(checkBtn);
-            container.appendChild(ignoreBtn);
-            
-            return container;
+          function projectContext(f) {
+            if (f.project_id) return f.project_id;
+            var parts = location.pathname.split('/'), idx = parts.indexOf('projects');
+            var p = idx >= 0 && parts.length > idx + 1 ? parts[idx + 1] : null;
+            return (p === 'new' || p === 'wiki') ? null : p;
           }
 
-          function swInject() {
-            if (window.sw_v126_done) return;
+          function post(url, body) {
+            var meta = document.querySelector('meta[name="csrf-token"]');
+            return fetch(url, {
+              method: 'POST', credentials: 'same-origin',
+              headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': meta ? meta.content : '' },
+              body: JSON.stringify(body)
+            }).then(function (r) { return r.json(); });
+          }
+
+          function addSidebarProject(name, identifier, parentIdentifier) {
+            var sidebar = document.querySelector('#mini-wiki-sidebar');
+            if (!sidebar) return;
+            var targetUl;
+            if (parentIdentifier) {
+              var parentLink = sidebar.querySelector('a.type-project[href$="/projects/' + parentIdentifier + '"]');
+              var parentLi = parentLink && parentLink.closest('li');
+              if (!parentLi) return;
+              var uls = Array.from(parentLi.children).filter(function (c) { return c.tagName === 'UL'; });
+              targetUl = uls.length >= 2 ? uls[1] : (uls.length === 1 && uls[0].querySelector('a.type-project') ? uls[0] : null);
+              if (!targetUl) { targetUl = document.createElement('ul'); parentLi.appendChild(targetUl); }
+            } else {
+              targetUl = sidebar.querySelector('.mini-wiki-sidebar-content > ul');
+            }
+            if (!targetUl) return;
+            var li = document.createElement('li');
+            li.className = 'expanded';
+            var iconHref = ((sidebar.querySelector('use') || { getAttribute: function () { return ''; } }).getAttribute('href') || '').split('#')[0] + '#icon--folder';
+            li.innerHTML = '<div class="node-label-container"><span class="expand-icon-spacer"></span>' +
+              '<a class="wiki-page-link type-project" href="/projects/' + esc(identifier) + '">' +
+              '<svg class="subnav-icon subnav-icon-folder" aria-hidden="true"><use href="' + iconHref + '"></use></svg>' +
+              '<span>' + esc(name) + '</span></a></div>';
+            targetUl.appendChild(li);
+          }
+
+          function finish(row, html) {
+            row.querySelector('.swf-folder-actions').innerHTML = html;
+            row.classList.add('swf-folder-done');
+          }
+
+          function act(row, f, kind) {
+            var actions = row.querySelector('.swf-folder-actions');
+            if (actions.getAttribute('data-working')) return;
+            actions.setAttribute('data-working', '1');
+            var msg = row.querySelector('.swf-folder-msg');
+            msg.textContent = ui.working;
+            var ctx = projectContext(f);
+            var base = ctx ? '/projects/' + encodeURIComponent(ctx) + '/subwikifiles/' : '/subwikifiles/';
+            var url = base + (kind === 'create' ? 'create_subproject_from_folder' : 'orphan_folder');
+            post(url, { folder_name: f.name, folder_path: f.path }).then(function (d) {
+              if (!d.success) throw new Error(d.error || '?');
+              msg.textContent = '';
+              if (kind === 'create') {
+                finish(row, '✓ ' + esc(ui.created) + ' <a href="/projects/' + esc(d.project_id) + '">' + esc(f.name) + '</a>');
+                addSidebarProject(f.name, d.project_id, ctx);
+              } else {
+                finish(row, esc(ui.ignored));
+              }
+              var box = document.querySelector('.swf-folder-prompt');
+              if (box && !box.querySelector('.swf-folder:not(.swf-folder-done)')) {
+                setTimeout(function () { box.parentNode && box.parentNode.removeChild(box); }, 4000);
+              }
+            }).catch(function (e) {
+              actions.removeAttribute('data-working');
+              msg.textContent = fmt(ui.error, { error: e.message });
+              msg.classList.add('swf-folder-err');
+            });
+          }
+
+          function inject() {
+            if (document.querySelector('.swf-folder-prompt')) return;
             var cnt = document.querySelector('#projects-index') || document.querySelector('#content');
             if (!cnt) return;
-            
-            if (document.querySelector('.folder-warning-flash')) return;
-
-            window.sw_v126_done = true;
-            console.log('RedmineSubwikifiles: swInject started');
-            
-            var b = document.createElement('div');
-            b.className = 'flash folder-warning-flash';
-            
-            var inner = '<div class="folder-warning-content">';
-            inner += '<strong>' + window.sw_v126_i18n.pending_folders.replace('%{details}.', '') + '</strong>&nbsp;&nbsp;';
-            window.sw_v126_folders.forEach(function(f) {
-              inner += '<span class="orphan-folder-entry" data-id="' + f.id + '">' + f.name + ' </span>';
+            var box = document.createElement('div');
+            box.className = 'flash warning swf-folder-prompt';
+            var multiParent = folders.some(function (f) { return f.project_id !== folders[0].project_id; });
+            var html = '<div class="swf-folder-title">' + esc(ui.title) + '</div><ul class="swf-folder-list">';
+            folders.forEach(function (f, i) {
+              var tip = f.project_id ? fmt(ui.create_tip_sub, { name: f.name, project: f.project_name || f.project_id }) : fmt(ui.create_tip_global, { name: f.name });
+              html += '<li class="swf-folder" data-i="' + i + '">' +
+                '<span class="swf-folder-name" title="' + esc(f.path) + '">' + ui.folder_html + esc(f.name) + '</span>' +
+                (multiParent && f.project_id ? '<span class="swf-folder-parent">' + esc(fmt(ui.in_project, { project: f.project_name || f.project_id })) + '</span>' : '') +
+                '<span class="swf-folder-actions">' +
+                  '<button type="button" class="swf-folder-create" title="' + esc(tip) + '">' + esc(ui.create) + '</button>' +
+                  '<a href="#" class="icon icon-close swf-folder-ignore" title="' + esc(ui.ignore_tip) + '">' + ui.ignore_html + '</a>' +
+                '</span><span class="swf-folder-msg"></span></li>';
             });
-            inner += '</div>';
-            b.innerHTML = inner;
-            
-            cnt.insertBefore(b, cnt.firstChild);
-            window.sw_v126_folders.forEach(function(f) {
-              var e = b.querySelector('[data-id="' + f.id + '"]');
-              if (e) e.appendChild(createSwButtons(f.name, f.path, f.id, f.project_id));
+            box.innerHTML = html + '</ul>';
+            cnt.insertBefore(box, cnt.firstChild);
+            Array.prototype.forEach.call(box.querySelectorAll('.swf-folder'), function (row) {
+              var f = folders[+row.getAttribute('data-i')];
+              row.querySelector('.swf-folder-create').onclick = function () { act(row, f, 'create'); };
+              row.querySelector('.swf-folder-ignore').onclick = function (e) { e.preventDefault(); act(row, f, 'ignore'); };
             });
-            console.log('RedmineSubwikifiles: v126FIX Done.');
           }
 
-          if (document.readyState === 'complete') swInject();
-          window.addEventListener('load', swInject);
-          document.addEventListener('turbolinks:load', swInject);
-          setInterval(swInject, 3000);
+          if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', inject);
+          else inject();
         })();
       JS
-      
+
       js_code.html_safe
     end
 
+    # Layout only - colors, fonts, buttons and links come from Redmine / the theme
+    # (box = Redmine's "flash warning", button = native button, ignore = icon link).
     def build_folder_css(controller)
       <<~CSS
-        .folder-action-btn { color: #fff !important; text-decoration: none !important; margin: 0 4px; padding: 2px 8px; border-radius: 4px; display: inline-block; font-weight: bold; }
-        .folder-action-btn.create-btn { background-color: #28a745; box-shadow: 0 1px 3px rgba(0,0,0,0.2); }
-        .folder-action-btn.orphan-btn { background-color: #6c757d; box-shadow: 0 1px 3px rgba(0,0,0,0.2); }
-        .folder-warning-flash { background-color: #e3f2fd !important; border: 1px solid #90caf9 !important; border-left: 5px solid #2196f3 !important; color: #0d47a1 !important; padding: 12px !important; margin-bottom: 20px !important; display: block !important; visibility: visible !important; }
-        .folder-warning-content { display: flex; align-items: center; flex-wrap: wrap; }
-        .orphan-folder-entry { margin-right: 15px; border-bottom: 1px dashed #2196f3; }
+        .swf-folder-prompt .swf-folder-title { font-weight: bold; margin-bottom: 4px; }
+        .swf-folder-prompt .swf-folder-list { list-style: none; margin: 0; padding: 0; }
+        .swf-folder-prompt .swf-folder { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 3px 0; }
+        .swf-folder-prompt .swf-folder-name { display: inline-flex; align-items: center; gap: 4px; font-weight: 600; min-width: 140px; }
+        .swf-folder-prompt .swf-folder-name svg { width: 16px; height: 16px; }
+        .swf-folder-prompt .swf-folder-parent { opacity: .75; font-size: 0.9em; }
+        .swf-folder-prompt .swf-folder-actions { display: inline-flex; align-items: center; gap: 10px; }
+        .swf-folder-prompt .swf-folder-create { margin: 0; }
+        .swf-folder-prompt .swf-folder-msg { opacity: .8; font-size: 0.9em; }
+        .swf-folder-prompt .swf-folder-msg.swf-folder-err { opacity: 1; font-weight: 600; }
+        .swf-folder-prompt .swf-folder-done .swf-folder-name { opacity: .6; }
+        .swf-folder-prompt .swf-folder-actions[data-working] { opacity: .5; pointer-events: none; }
       CSS
-    end
-    
-    # Remove body hook as head is sufficient
-    def view_layouts_base_body_bottom(context={})
-      ''
     end
   end
 end
