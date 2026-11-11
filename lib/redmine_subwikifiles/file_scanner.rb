@@ -103,13 +103,7 @@ module RedmineSubwikifiles
     def plugin_enabled?
       return false unless project.wiki
       
-      # Global setting
-      global_enabled = Setting.plugin_redmine_subwikifiles['enabled'] == '1'
-      
-      # Project-specific override
-      project_module = project.enabled_module_names.include?('subwikifiles')
-      
-      global_enabled || project_module
+      ProjectSync.enabled_for?(project)
     end
   end
 end

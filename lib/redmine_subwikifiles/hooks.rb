@@ -19,15 +19,14 @@ module RedmineSubwikifiles
       
       ''
     end
-    
+
     # Hook triggered after a project is saved.
     # Creates folder structure for new subprojects (only if no folder exists yet).
     def controller_projects_new_after_save(context={})
       project = context[:project]
       return unless project && project.parent
-      return unless project.parent.module_enabled?(:redmine_subwikifiles) || Setting.plugin_redmine_subwikifiles['enabled']
+      return unless RedmineSubwikifiles.enabled_for?(project.parent)
       
-      require File.expand_path('../file_storage', __FILE__)
       storage = RedmineSubwikifiles::FileStorage.new(project)
       project_path = storage.project_path
       

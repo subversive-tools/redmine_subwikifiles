@@ -6,7 +6,13 @@ module RedmineSubwikifiles
       @project = project
       @backend = GitBackend.new(project)
       @storage = FileStorage.new(project)
+      @imported = []
+      @placeholders = []
+      @conflicted = []
     end
+
+    # Pages imported / placeholder parent pages created during the last sync_from_filesystem
+    attr_reader :imported, :placeholders
     
     # Sync filesystem changes to Redmine
     def sync_from_filesystem
@@ -22,8 +28,7 @@ module RedmineSubwikifiles
       # This prevents conflicts if a page was deleted and recreated
       
       changes[:deleted].each do |file|
-        Rails.logger.info "RedmineSubwikifiles: DEBUG: File #{file} deleted from filesystem. Keeping wiki page."
-        # delete_page_in_redmine(file) # DISABLED: Active check handles this
+        Rails.logger.info "RedmineSubwikifiles: File #{file} deleted from filesystem. Keeping wiki page."
       end
       
       changes[:renamed].each do |old_file, new_file|
@@ -31,7 +36,6 @@ module RedmineSubwikifiles
       end
       
       changes[:modified].each do |file|
-        Rails.logger.info "RedmineSubwikifiles: DEBUG: Processing modified for #{file}"
         update_page_content(file)
       end
       
@@ -39,8 +43,9 @@ module RedmineSubwikifiles
         create_page_in_redmine(file)
       end
       
-      # Commit the sync (add all changes)
+      # Commit the sync (add all changes, except unresolved conflicts which must keep their base)
       @backend.run_git('add', '-A') if changes.values.any?(&:any?)
+      @conflicted.each { |f| @backend.run_git('reset', '-q', '--', f) rescue nil }
       @backend.run_git('commit', '-m', 'Synced from filesystem', '--allow-empty') rescue nil
       
       Rails.logger.info "RedmineSubwikifiles: Synced #{changes.values.flatten.size} changes from filesystem"
@@ -49,18 +54,6 @@ module RedmineSubwikifiles
     end
     
     private
-    
-    def delete_page_in_redmine(file)
-      return unless file.end_with?('.md')
-      
-      title = file_to_title(file)
-      page = find_page_by_title(title)
-      
-      if page
-        page.destroy
-        Rails.logger.info "RedmineSubwikifiles: Deleted page '#{title}' (file deleted)"
-      end
-    end
     
     def rename_page_in_redmine(old_file, new_file)
       return unless old_file.end_with?('.md') && new_file.end_with?('.md')
@@ -71,11 +64,7 @@ module RedmineSubwikifiles
       page = find_page_by_title(old_title)
       
       if page
-        # Prevent triggering our own rename hook
-        Thread.current[:redmine_subwikifiles_syncing] = true
-        page.update(title: new_title)
-        Thread.current[:redmine_subwikifiles_syncing] = false
-        
+        RedmineSubwikifiles.without_auto_sync { page.update(title: new_title) }
         Rails.logger.info "RedmineSubwikifiles: Renamed page '#{old_title}' to '#{new_title}' (file renamed)"
       end
     end
@@ -86,79 +75,74 @@ module RedmineSubwikifiles
       title = file_to_title(file)
       page = find_page_by_title(title)
       
-      if page && page.content
-        file_path = @storage.file_path(title)
-        new_content = File.read(file_path, encoding: 'UTF-8')
+      return unless page
+      
+      RedmineSubwikifiles.without_auto_sync do
+        content = page.content
+        return unless content
         
-        # Prevent triggering our own save hook
-        Thread.current[:redmine_subwikifiles_syncing] = true
-        page.content.text = new_content
+        # Three-way check against the last committed state: apply only if just the file changed.
+        # Conflicts are not committed, so they keep their base and show up in the sync popover.
+        result = SyncState.new(@project, storage: @storage).classify(page, content)
+        unless result.state == :to_wiki
+          @conflicted << file if result.state == :conflict
+          Rails.logger.info "RedmineSubwikifiles: Not applying modified file '#{file}' (state: #{result.state})"
+          return
+        end
+        
+        # Only the body goes into the wiki - the frontmatter stays in the file
+        page.content.text = result.file_body
+        page.content.comments = "Updated from filesystem (Git)"
         page.content.save
-        Thread.current[:redmine_subwikifiles_syncing] = false
         
         Rails.logger.info "RedmineSubwikifiles: Updated page '#{title}' (file modified)"
       end
     end
     
+    # New file detected by Git: import it through WikiImporter (the same path as the file scanner),
+    # so frontmatter is stripped from the page text and the parent relationship is applied.
+    # Files without frontmatter are left for the manual assignment ("pending files").
     def create_page_in_redmine(file)
       return unless file.end_with?('.md')
-      
-      title = file_to_title(file)
-      
-      # Check if page already exists
-      return if find_page_by_title(title)
-      
-      # Create wiki if it doesn't exist
-      unless @project.wiki
-        @project.create_wiki
-      end
-      
-      file_path = @storage.file_path(title)
-      content_text = File.read(file_path, encoding: 'UTF-8')
-      
-      # Check for frontmatter
-      begin
-        parsed = FrontmatterParser.parse(content_text)
-        unless parsed[:metadata].present?
-          Rails.logger.info "RedmineSubwikifiles: Skipping creation of page '#{title}': No frontmatter found"
-          return
-        end
-        # Use content without frontmatter if needed, but WikiContent usually stores full text?
-        # Standard Redmine stores ONLY content in `text` column.
-        # But Subwikifiles seems to rely on file being the source of truth, so we should store the full content?
-        # Wait, WikiImporter stores `content` which comes from parser.
-        # But here we are just creating a page from a file that *already exists*.
-        # Let's see what WikiContent expects.
-        # If we store full text (including frontmatter) in DB, Redmine might show it.
-        # Subwikifiles usually separates them.
-        # However, for now, let's stick to the existing behavior of reading the whole file,
-        # just adding the check.
-      rescue => e
-        Rails.logger.error "RedmineSubwikifiles: Failed to parse frontmatter for '#{title}': #{e.message}"
+      return if file.include?('/') # files in subfolders belong to subprojects
+
+      file_path = File.join(@storage.project_path, file)
+      return unless File.file?(file_path)
+
+      filename = File.basename(file, '.md')
+      title = Wiki.titleize(filename)
+      return if @project.wiki && @project.wiki.pages.find_by(title: title)
+
+      parsed = FrontmatterParser.parse(File.read(file_path, encoding: 'UTF-8'))
+      unless parsed[:metadata].present?
+        Rails.logger.info "RedmineSubwikifiles: Skipping creation of page '#{title}': No frontmatter found"
         return
       end
-      
-      # Create the page
-      page = WikiPage.new(wiki: @project.wiki, title: title)
-      content = WikiContent.new(
-        page: page,
-        text: content_text,
-        author: User.current || User.anonymous
-      )
-      page.content = content
-      
-      Thread.current[:redmine_subwikifiles_syncing] = true
-      if page.save
-        Rails.logger.info "RedmineSubwikifiles: Successfully created/synced page '#{title}'"
-      else
-        Rails.logger.error "RedmineSubwikifiles: Failed to save page '#{title}': #{page.errors.full_messages.join(', ')}"
-        if page.content && page.content.errors.any?
-          Rails.logger.error "RedmineSubwikifiles: Content errors: #{page.content.errors.full_messages.join(', ')}"
-        end
+
+      if WikiImporter.deleted_page_reference?(parsed[:metadata])
+        Rails.logger.info "RedmineSubwikifiles: '#{file}' belongs to a deleted page - not re-imported"
+        return
       end
-      Thread.current[:redmine_subwikifiles_syncing] = false
-      
-      Rails.logger.info "RedmineSubwikifiles: Created page '#{title}' (new file)"
+
+      @project.create_wiki unless @project.wiki
+
+      result = WikiImporter.new(@project).import_files([{
+        path: file_path,
+        filename: filename,
+        type: 'wiki',
+        has_frontmatter: true,
+        metadata: parsed[:metadata],
+        content: parsed[:content],
+        valid: true,
+        errors: []
+      }])
+      @imported.concat(result[:imported])
+      @placeholders.concat(result[:placeholders])
+      result[:skipped].each do |s|
+        Rails.logger.error "RedmineSubwikifiles: Failed to import '#{s[:file]}': #{Array(s[:errors]).join(', ')}"
+      end
+    rescue => e
+      Rails.logger.error "RedmineSubwikifiles: Failed to import new file '#{file}': #{e.message}"
     end
     
     def file_to_title(file)

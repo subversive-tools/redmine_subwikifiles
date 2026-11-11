@@ -5,8 +5,7 @@ module RedmineSubwikifiles
     def initialize(page)
       @page = page
       @project = page.project
-      @base_dir = Setting.plugin_redmine_subwikifiles['base_path'] || '/var/lib/redmine/wiki_files'
-      @project_path = File.join(@base_dir, @project.identifier)
+      @project_path = FileStorage.new(@project).project_path
       
       # Determine attachment folder based on page title
       sanitized_title = get_sanitized_title
@@ -39,17 +38,13 @@ module RedmineSubwikifiles
         
         # Check if attachment already exists
         unless @page.attachments.exists?(filename: filename)
-          # Create new attachment
-          file = File.open(file_path)
-          permitted_params = ActionController::Parameters.new(file: file)
-          
-          # We need to simulate an upload or just attach the file directly
-          # Redmine Attachment.create needs a file object
-          a = Attachment.new(:file => file)
-          a.filename = filename
-          a.author = User.current # Or find a suitable user
-          a.container = @page
-          a.save
+          File.open(file_path) do |file|
+            a = Attachment.new(file: file)
+            a.filename = filename
+            a.author = User.current
+            a.container = @page
+            a.save
+          end
         end
       end
     end

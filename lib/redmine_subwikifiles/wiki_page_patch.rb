@@ -60,46 +60,19 @@ module RedmineSubwikifiles
       Rails.logger.error "RedmineSubwikifiles: Error updating frontmatter: #{e.message}"
     end
     
+    # Deleting a wiki page no longer deletes its file automatically.
+    # The remaining file (its header still carries the old page id) shows up in the sync popover
+    # under "to be deleted", where the user decides: delete file / recreate page / skip.
     def delete_file
       return unless plugin_enabled?
-      
-      full_title = get_full_title_from(title)
-      storage = RedmineSubwikifiles::FileStorage.new(project)
-      file_path = storage.file_path(full_title)
-      
-      # Delete file if it exists
-      if File.exist?(file_path)
-        File.delete(file_path)
-        Rails.logger.info "RedmineSubwikifiles: Deleted #{file_path}"
-        
-        # Handle Git deletion
-        if defined?(RedmineSubwikifiles::GitBackend)
-          begin
-            RedmineSubwikifiles::GitBackend.new(project).delete(
-              title,
-              author: User.current,
-              message: "Deleted: #{title}"
-            )
-          rescue => e
-            Rails.logger.warn "RedmineSubwikifiles: Git delete failed: #{e.message}"
-          end
-        end
-      end
-    rescue => e
-      Rails.logger.error "RedmineSubwikifiles: Error deleting file: #{e.message}"
+      Rails.logger.info "RedmineSubwikifiles: Page '#{title}' deleted - file kept, listed as deletion candidate"
+      RedmineSubwikifiles::KnownFile.forget(self)
     end
     
     private
     
     def plugin_enabled?
-      return false unless project
-      
-      # Check if globally enabled OR enabled for this project (or ancestors)
-      return true if Setting.plugin_redmine_subwikifiles['enabled']
-      
-      project.self_and_ancestors.any? do |p|
-        p.module_enabled?(:redmine_subwikifiles)
-      end
+      RedmineSubwikifiles.enabled_for?(project)
     end
     
     def get_full_title_from(title_value)

@@ -9,13 +9,11 @@ module RedmineSubwikifiles
       @is_global = project.nil?
       
       # Fetch base path from settings, default to /var/lib/redmine/wiki_files if not set
-      @base_path = Setting.plugin_redmine_subwikifiles['base_path'] || '/var/lib/redmine/wiki_files'
+      @base_path = RedmineSubwikifiles.base_path
       
       if @is_global
         @project_path = @base_path
       else
-        # Use FileStorage to retrieve the correct project path (supporting nesting)
-        require File.expand_path('../file_storage', __FILE__)
         @project_path = FileStorage.new(project).project_path
       end
     end

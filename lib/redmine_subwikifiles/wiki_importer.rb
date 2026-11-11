@@ -6,6 +6,13 @@ module RedmineSubwikifiles
     def initialize(project)
       @project = project
     end
+
+    # The header references a wiki page id that no longer exists: the page was deleted in Redmine.
+    # Such files must not be re-imported automatically (deletion candidates, decided by the user).
+    def self.deleted_page_reference?(metadata)
+      id = (metadata || {})['id'] || (metadata || {})['wiki_id']
+      id.present? && !WikiPage.exists?(id: id)
+    end
     
     # Import a single file into Redmine as WikiPage
     # Returns: { success: bool, page_title: string, errors: [] }
@@ -45,12 +52,20 @@ module RedmineSubwikifiles
           page.parent = parent_page
           Rails.logger.info "RedmineSubwikifiles: WikiImporter - Linked '#{title}' to parent '#{parent_page.title}' (ID: #{parent_page.id})"
         else
-          Rails.logger.warn "RedmineSubwikifiles: WikiImporter - Parent page '#{metadata['parent']}' NOT found in wiki"
-          return { 
-            success: false, 
-            page_title: title,
-            errors: ["Parent page '#{metadata['parent']}' not found"]
-          }
+          # EXPERIMENTAL (to be clarified/tested, see doc/OPEN_ISSUES.md):
+          # Parent exists neither as wiki page nor as file -> create a placeholder parent page
+          # so the hierarchy from the files is preserved.
+          parent_page = create_placeholder_parent(metadata['parent'], file_info[:filename])
+          unless parent_page
+            Rails.logger.warn "RedmineSubwikifiles: WikiImporter - Parent page '#{metadata['parent']}' NOT found and placeholder could not be created"
+            return {
+              success: false,
+              page_title: title,
+              errors: ["Parent page '#{metadata['parent']}' not found"]
+            }
+          end
+          page.parent = parent_page
+          placeholder_title = parent_page.title
         end
       end
       
@@ -86,6 +101,7 @@ module RedmineSubwikifiles
           
           Rails.logger.info "RedmineSubwikifiles: Imported '#{title}' from filesystem"
           result = { success: true, page_title: title }
+          result[:placeholder] = placeholder_title if placeholder_title
           if renamed
             result[:renamed] = true
             result[:old_title] = old_title
@@ -101,16 +117,18 @@ module RedmineSubwikifiles
     end
     
     # Import multiple files
-    # Returns: { imported: [], renamed: [], skipped: [] }
+    # Returns: { imported: [], renamed: [], skipped: [], placeholders: [] }
     def import_files(file_infos)
       imported = []
       renamed = []
       skipped = []
+      placeholders = []
       
       file_infos.each do |file_info|
         result = import_file(file_info)
         
         if result[:success]
+          placeholders << result[:placeholder] if result[:placeholder]
           if result[:renamed]
             renamed << { old_title: result[:old_title], new_title: result[:page_title] }
           else
@@ -124,7 +142,34 @@ module RedmineSubwikifiles
         end
       end
       
-      { imported: imported, renamed: renamed, skipped: skipped }
+      { imported: imported, renamed: renamed, skipped: skipped, placeholders: placeholders.uniq }
+    end
+
+    private
+
+    # EXPERIMENTAL: creates an empty parent page listing its children.
+    # Saving it also writes the corresponding Markdown file (WikiContentPatch).
+    # Returns the page or nil.
+    def create_placeholder_parent(parent_title, child_filename)
+      title = Wiki.titleize(parent_title.to_s)
+      return nil if title.blank?
+
+      existing = project.wiki.find_page(title)
+      return existing if existing
+
+      placeholder = project.wiki.pages.build(title: title)
+      placeholder.content = WikiContent.new(
+        text: "{{child_pages}}\n",
+        author: User.current,
+        comments: "Placeholder created: referenced as parent by '#{child_filename}.md'"
+      )
+      if placeholder.save
+        Rails.logger.info "RedmineSubwikifiles: WikiImporter - Created placeholder parent page '#{title}' for '#{child_filename}'"
+        placeholder
+      else
+        Rails.logger.error "RedmineSubwikifiles: WikiImporter - Placeholder '#{title}' failed: #{placeholder.errors.full_messages.join(', ')}"
+        nil
+      end
     end
   end
 end

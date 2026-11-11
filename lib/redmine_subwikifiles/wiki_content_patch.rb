@@ -20,10 +20,15 @@ module RedmineSubwikifiles
       metadata = build_frontmatter_metadata
       
       # Combine metadata + content
-      full_content = RedmineSubwikifiles::FrontmatterParser.build(metadata, text)
+      full_content = RedmineSubwikifiles::FrontmatterParser.build(metadata, text_without_frontmatter)
       
       # Write to file (just page title, no hierarchy in filename)
-      storage.write(page.title, full_content)
+      @subwikifiles_write_error = nil
+      unless storage.write(page.title, full_content)
+        @subwikifiles_write_error = storage.last_error || 'unknown error'
+        return
+      end
+      RedmineSubwikifiles::KnownFile.remember(page, storage.resolve_existing_path(page.title))
       
       # Sync attachments to FS
       if defined?(AttachmentHandler)
@@ -39,9 +44,13 @@ module RedmineSubwikifiles
         )
       end
     rescue => e
+      @subwikifiles_write_error = e.message
       Rails.logger.error "RedmineSubwikifiles: Error writing MD file: #{e.message}"
       Rails.logger.error e.backtrace.join("\n")
     end
+
+    # Error message of the last failed file write (nil on success)
+    attr_reader :subwikifiles_write_error
     
     def load_from_md_file_with_frontmatter
       return unless plugin_enabled?
@@ -60,62 +69,43 @@ module RedmineSubwikifiles
       metadata = parsed[:metadata]
       
       # Conflict strategy handling
-      strategy = Setting.plugin_redmine_subwikifiles['conflict_strategy'] || 'file_wins'
+      strategy = RedmineSubwikifiles.conflict_strategy
       
       # If file is newer than DB record
-      if file_mtime > updated_on
-        if strategy == 'file_wins' || strategy == 'manual'
-          # Only update if content changed to avoid unnecessary versions
-          if self.text != content_only
-            self.text = content_only
-            
-            # Get author from git
-            git_author = nil
-            begin
-               # We need absolute path for GitBackend or relative? 
-               # GitBackend expects project.
-               # We don't have file_path here easily, need to resolve it.
-               # Storage.read returns data, not path.
-               # But we can reconstruct path or ask storage.
-               # Let's ask storage for path.
-               file_path = storage.file_path(page.title)
-               
-               if file_path && File.exist?(file_path)
-                 backend = RedmineSubwikifiles::GitBackend.new(page.project)
-                 git_author = backend.last_commit_author(file_path)
-               end
-            rescue => e
-               Rails.logger.warn "RedmineSubwikifiles: Could not get git author: #{e.message}"
+      if file_mtime > updated_on && %w[file_wins manual].include?(strategy)
+        # Only update if content changed and only the file changed since the last common state
+        # (three-way check; conflicts are left for the sync popover)
+        if self.text != content_only && unambiguous_file_change?
+          self.text = content_only
+          
+          # Get author from git
+          git_author = nil
+          begin
+            file_path = storage.file_path(page.title)
+            if file_path && File.exist?(file_path)
+              backend = RedmineSubwikifiles::GitBackend.new(page.project)
+              git_author = backend.last_commit_author(file_path)
             end
-            
-            author_text = git_author ? " (Author: #{git_author})" : ""
-            
-            # Prevent loop
-            Thread.current[:redmine_subwikifiles_syncing] = true
-            begin
-              # Save with a specific comment to indicate it came from FS
-              self.comments = "Updated from filesystem#{author_text}"
-              self.save!
-              Rails.logger.info "RedmineSubwikifiles: Updated WikiPage #{page.title} from filesystem."
-              
-              # Set flag for controller to see
-              Thread.current[:redmine_subwikifiles_just_updated] = true
-            ensure
-              Thread.current[:redmine_subwikifiles_syncing] = false
-            end
-            
-            # Sync attachments from FS
-            if defined?(AttachmentHandler) && page
-              AttachmentHandler.new(page).sync_from_fs
-            end
+          rescue => e
+            Rails.logger.warn "RedmineSubwikifiles: Could not get git author: #{e.message}"
           end
           
-          # Sync parent relationship from frontmatter (even if content didn't change)
-          sync_parent_from_metadata(metadata)
+          author_text = git_author ? " (Author: #{git_author})" : ""
           
-        elsif strategy == 'manual'
-          Rails.logger.info "RedmineSubwikifiles: File is newer but strategy is manual. DB: #{updated_on}, File: #{file_mtime}"
+          RedmineSubwikifiles.without_auto_sync do
+            self.comments = "Updated from filesystem#{author_text}"
+            self.save!
+            Rails.logger.info "RedmineSubwikifiles: Updated WikiPage #{page.title} from filesystem."
+            Thread.current[:redmine_subwikifiles_just_updated] = true
+          end
+          
+          if defined?(AttachmentHandler) && page
+            AttachmentHandler.new(page).sync_from_fs
+          end
         end
+        
+        # Sync parent relationship from frontmatter (even if content didn't change)
+        sync_parent_from_metadata(metadata)
       end
     rescue => e
       Rails.logger.error "RedmineSubwikifiles: Error reading MD file: #{e.message}"
@@ -124,15 +114,29 @@ module RedmineSubwikifiles
 
     private
 
-    def plugin_enabled?
-      return true if Setting.plugin_redmine_subwikifiles['enabled']
-      
-      project = page.project
-      return false unless project
-      
-      project.self_and_ancestors.any? do |p|
-        p.module_enabled?(:redmine_subwikifiles)
+    def unambiguous_file_change?
+      RedmineSubwikifiles.without_auto_sync do
+        RedmineSubwikifiles::SyncState.new(page.project).classify(page, self).state == :to_wiki
       end
+    end
+
+    # Wiki text without a leading frontmatter block. Guards against duplicated headers
+    # if a frontmatter block ever ended up in the wiki text (the metadata is always rebuilt from the DB).
+    def text_without_frontmatter
+      parsed = RedmineSubwikifiles::FrontmatterParser.parse(text.to_s)
+      if parsed[:metadata].is_a?(Hash) && parsed[:metadata].present?
+        Rails.logger.warn "RedmineSubwikifiles: Stripped frontmatter from wiki text of '#{page&.title}'"
+        parsed[:content]
+      else
+        text
+      end
+    rescue => e
+      Rails.logger.warn "RedmineSubwikifiles: Could not check wiki text for frontmatter: #{e.message}"
+      text
+    end
+
+    def plugin_enabled?
+      RedmineSubwikifiles.enabled_for?(page&.project)
     end
 
     def build_frontmatter_metadata
@@ -167,14 +171,10 @@ module RedmineSubwikifiles
       parent_page = page.wiki.pages.find_by(title: parent_title)
       
       if parent_page && page.parent_id != parent_page.id
-        # Update parent relationship in Redmine
-        Thread.current[:redmine_subwikifiles_syncing] = true
-        begin
+        RedmineSubwikifiles.without_auto_sync do
           page.parent_id = parent_page.id
           page.save!
           Rails.logger.info "RedmineSubwikifiles: Updated parent for '#{page.title}' to '#{parent_title}'"
-        ensure
-          Thread.current[:redmine_subwikifiles_syncing] = false
         end
       elsif metadata['parent'] && !parent_page
         Rails.logger.warn "RedmineSubwikifiles: Parent '#{parent_title}' not found for page '#{page.title}'"

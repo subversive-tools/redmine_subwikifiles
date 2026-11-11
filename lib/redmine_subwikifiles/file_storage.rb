@@ -8,7 +8,7 @@ module RedmineSubwikifiles
       @project = project
       @project_identifier = project.identifier
       # Fetch base path from settings, default to /var/lib/redmine/wiki_files if not set
-      @base_dir = Setting.plugin_redmine_subwikifiles['base_path'] || '/var/lib/redmine/wiki_files'
+      @base_dir = RedmineSubwikifiles.base_path
       
       # Build path by finding folder with matching .project metadata
       @project_path = build_project_path(project)
@@ -129,37 +129,39 @@ module RedmineSubwikifiles
       FileUtils.mkdir_p(@project_path) unless File.directory?(@project_path)
 
       File.write(path, content, encoding: 'UTF-8')
+      @last_error = nil
+      true
     rescue => e
+      @last_error = e.message
       Rails.logger.error "RedmineSubwikifiles: Failed to write file for #{title}: #{e.message}"
+      false
     end
+
+    # Error message of the last failed write (nil if last write succeeded)
+    attr_reader :last_error
 
     # Returns the default path for a new file (sanitized)
     def file_path(title)
       sanitized = sanitize_filename(title)
       File.join(@project_path, "#{sanitized}.md")
     end
-    
-    private
-    
+
     # Try to find an existing file matching the title variants
     def resolve_existing_path(title)
-      # Variants to check
       variants = [
-        sanitize_filename(title),         # Standard (underscores)
-        title,                            # As-is (e.g. spaces)
-        title.gsub(' ', '-'),             # Hyphens
-        title.gsub(/[^\w\s\-]/, ''),      # Minimal sanitization
+        sanitize_filename(title),          # Standard (underscores)
+        title,                             # As-is (e.g. spaces)
+        title.gsub(' ', '-'),              # Hyphens
+        title.gsub(/[^\w\s\-]/, ''),       # Minimal sanitization
         sanitize_filename(title).downcase, # Lowercase underscore
         title.downcase.gsub(' ', '-')      # Lowercase hyphen
       ].uniq
-      
+
       variants.each do |v|
         path = File.join(@project_path, "#{v}.md")
-        Rails.logger.info "RedmineSubwikifiles: Checking existence of #{path}"
         return path if File.exist?(path)
       end
-      
-      Rails.logger.info "RedmineSubwikifiles: Resolution failed for title '#{title}'. Checked: #{variants.map { |v| File.join(@project_path, "#{v}.md") }.join(', ')}"
+
       nil
     end
 

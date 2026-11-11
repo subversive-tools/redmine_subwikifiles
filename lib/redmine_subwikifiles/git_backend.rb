@@ -5,7 +5,7 @@ module RedmineSubwikifiles
     def initialize(project)
       @project = project
       # Base path from settings or default
-      @base_dir = Setting.plugin_redmine_subwikifiles['base_path'] || '/var/lib/redmine/wiki_files'
+      @base_dir = RedmineSubwikifiles.base_path
       
       # Use FileStorage for consistent path resolution (respects .project metadata)
       @repo_path = FileStorage.new(project).project_path

@@ -34,14 +34,13 @@ module RedmineSubwikifiles
         end
 
         # Only proceed if the plugin is enabled specifically for this project or globally
-        is_globally_enabled = Setting.plugin_redmine_subwikifiles['enabled']
-        return unless self.module_enabled?(:redmine_subwikifiles) || is_globally_enabled
+        return unless RedmineSubwikifiles.enabled_for?(self)
 
         # Respect conflict_strategy setting:
         #   file_wins  → filesystem is authoritative, don't rename folders from Redmine
         #   db_wins    → Redmine is authoritative, rename folder to match project name
         #   manual     → bidirectional sync, rename folder to match project name
-        conflict_strategy = Setting.plugin_redmine_subwikifiles['conflict_strategy'] || 'file_wins'
+        conflict_strategy = RedmineSubwikifiles.conflict_strategy
         
         if conflict_strategy == 'file_wins'
           # File system is authoritative – only update .project metadata, don't touch folder name
@@ -50,16 +49,7 @@ module RedmineSubwikifiles
           return
         end
 
-        base_path = Setting.plugin_redmine_subwikifiles['base_path'] || '/var/lib/redmine/wiki_files'
-        
-        # Determine parent path
-        if parent
-          require File.expand_path('../file_storage', __FILE__)
-          # Use parent (which is already saved/exists)
-          parent_path = RedmineSubwikifiles::FileStorage.new(parent).project_path
-        else
-          parent_path = base_path
-        end
+        parent_path = parent ? RedmineSubwikifiles::FileStorage.new(parent).project_path : RedmineSubwikifiles.base_path
 
         return unless Dir.exist?(parent_path)
         
@@ -154,21 +144,15 @@ module RedmineSubwikifiles
       end
 
       def update_project_metadata(folder_path)
-        require File.expand_path('../file_storage', __FILE__)
         RedmineSubwikifiles::FileStorage.write_project_metadata(folder_path, self)
       end
 
       # Update only .project metadata without renaming the folder
       def update_metadata_only
-        require File.expand_path('../file_storage', __FILE__)
-        begin
-          folder_path = RedmineSubwikifiles::FileStorage.new(self).project_path
-          if Dir.exist?(folder_path)
-            update_project_metadata(folder_path)
-          end
-        rescue => e
-          Rails.logger.error "RedmineSubwikifiles: Failed to update metadata: #{e.message}"
-        end
+        folder_path = RedmineSubwikifiles::FileStorage.new(self).project_path
+        update_project_metadata(folder_path) if Dir.exist?(folder_path)
+      rescue => e
+        Rails.logger.error "RedmineSubwikifiles: Failed to update metadata: #{e.message}"
       end
     end
   end
